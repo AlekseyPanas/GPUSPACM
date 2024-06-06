@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from typing import Optional
 import heapq
 from abc import abstractmethod
+from enum import IntEnum
+import random
+import time
+import colorsys
+pygame.init()
 
 
 """
@@ -31,7 +36,7 @@ Steps:
 """
 
 
-@dataclass
+@dataclass(unsafe_hash=True)
 class Snapshot:
     x: float
     v: float
@@ -48,6 +53,10 @@ class Event:
     @abstractmethod
     def get_force(self, target: Particle):
         """Return the force, in newtons, that this even applies on the given particle"""
+
+    def __lt__(self, other):
+        """Completely arbitrary comparison so that code doesn't crash"""
+        return self.h < other.h
 
 
 class GravityEvent(Event):
@@ -91,14 +100,13 @@ class Collidable:
     def get_lth_stiffness(self, l: int) -> float:
         return self.r1 * (l ** 3)  # ACM paper section 4
 
-    def get_velocity_changed_snapshots(self, window_start: float, window_end: float) -> set[Snapshot]:
+    def get_velocity_changed_timestamps(self, window_start: float, window_end: float) -> set[float]:
         """
         When detecting collisions across a rollback window, we need the snapshots where velocity of the object
         changed to compute piecewise linear collision intervals
         :return: a list of velocity-changed snapshots including window_start and window_end by default
         """
-        return {Snapshot(self.init_x, 0, window_start, None, False),
-                Snapshot(self.init_x, 0, window_end, None, False)}
+        return {window_start, window_end}
 
     def get_latest_position(self) -> float:
         return self.init_x
@@ -124,9 +132,9 @@ class Particle(Collidable):
 
         self.mass = mass
 
-    def get_velocity_changed_snapshots(self, window_start: float, window_end: float) -> set[Snapshot]:
-        return {self.current_snapshots[0], self.current_snapshots[-1]}.union(
-            {snap for snap in self.current_snapshots if snap.has_velocity_changed})
+    def get_velocity_changed_timestamps(self, window_start: float, window_end: float) -> set[float]:
+        return {self.current_snapshots[0].t, self.current_snapshots[-1].t}.union(
+            {snap.t for snap in self.current_snapshots if snap.has_velocity_changed})
 
     def get_latest_position(self) -> float:
         return self.current_snapshots[-1].x
@@ -142,6 +150,12 @@ class Particle(Collidable):
             else:
                 break
         return before.x + ((t - before.t) * before.v)
+
+
+class YieldType(IntEnum):
+    EVENT_FINISHED = 0
+    TIME_WINDOW_FINISHED = 1
+    TIME_WINDOW_FINISHED_ROLLBACK = 2
 
 
 class SPACM1DSim:
@@ -166,9 +180,10 @@ class SPACM1DSim:
         self.particles: list[Particle] = [Particle(collision_stiffness, penalty_layer_thickness,
                                                    particle_positions[i], particle_velocities[i],
                                                    0, particle_masses[i]) for i in range(len(particle_positions))]
-        self.collideables: list[Collidable] = [Collidable(collision_stiffness,
+        self.walls: list[Collidable] = [Collidable(collision_stiffness,
                                                           penalty_layer_thickness,
-                                                          p) for p in wall_positions] + self.particles
+                                                          p) for p in wall_positions]
+        self.collideables: list[Collidable] = self.walls + self.particles
 
     def run_sim(self):
         while True:
@@ -184,14 +199,17 @@ class SPACM1DSim:
                     p.current_snapshots.append(Snapshot(x1, -1, t1, None, False))  # Add new snapshot with placeholder v and has_velocity_changed
 
                 for p in self.particles:
-                    p0 = p.current_snapshots[-1]
+                    p0 = p.current_snapshots[-2]
+                    pc = p.current_snapshots[-1]
                     v1 = p0.v + e.h * (e.get_force(p) / p.mass)  # integrate force with respect to force's timestep
 
                     # Update placeholder v and has_velocity_changed values
-                    p0.has_velocity_changed = p0.v != v1
-                    p0.v = v1
+                    pc.has_velocity_changed = p0.v != v1
+                    pc.v = v1
 
                 heapq.heappush(self.eventQ, (te + e.h, e))  # Schedule next force event
+
+                yield YieldType.EVENT_FINISHED, self
 
             # Linearly update particle positions and timestamps to the end of the rollback window
             for p in self.particles:
@@ -205,43 +223,42 @@ class SPACM1DSim:
             next_penalty_candidates: list[Collidable] = []  # Objects whose next penalty layer needs activating
             for c in self.collideables:  # Checking c's penalty layers
                 for p in self.particles:  # Moving particles which may have entered a new penalty layer for c
+                    if p is not c:  # Don't detect against self, duh
 
-                    # All snapshots where p or c had a velocity change (guaranteed to also include the first and snapshot
-                    # of this rollback window)
-                    velocity_changed_snaps = sorted(
-                            c.get_velocity_changed_snapshots(self.start_of_window,
-                                                                                  self.end_of_window).union(
-                            p.get_velocity_changed_snapshots(self.start_of_window, self.end_of_window)),
-                        key=lambda snap: snap.t
-                    )
+                        # All snapshots where p or c had a velocity change (guaranteed to also include the first and snapshot
+                        # of this rollback window)
+                        velocity_changed_timestamps = sorted(
+                                c.get_velocity_changed_timestamps(self.start_of_window,
+                                                                  self.end_of_window).union(
+                                p.get_velocity_changed_timestamps(self.start_of_window, self.end_of_window)))
 
-                    # Loop through intervals between above snapshots
-                    for i in range(len(velocity_changed_snaps) - 1):
-                        # Get thickness of c's next inactive penalty layer
-                        c_next_thickness = c.get_lth_thickness(len(c.active_penalties) + 1)
+                        # Loop through intervals between above snapshots
+                        for i in range(len(velocity_changed_timestamps) - 1):
+                            # Get thickness of c's next inactive penalty layer
+                            c_next_thickness = c.get_lth_thickness(len(c.active_penalties) + 1)
 
-                        # interval time bounds
-                        t0 = velocity_changed_snaps[i].t
-                        t1 = velocity_changed_snaps[i+1].t
+                            # interval time bounds
+                            t0 = velocity_changed_timestamps[i]
+                            t1 = velocity_changed_timestamps[i+1]
 
-                        c_positions = [c.get_pos_at_time(t0), c.get_pos_at_time(t1)]
-                        p_positions = [c.get_pos_at_time(t0), c.get_pos_at_time(t1)]
+                            c_positions = [c.get_pos_at_time(t0), c.get_pos_at_time(t1)]
+                            p_positions = [p.get_pos_at_time(t0), p.get_pos_at_time(t1)]
 
-                        # Check if particle is already within the penalty layer at start of this interval
-                        if c_positions[0] - c_next_thickness <= p_positions[0] <= c_positions[0] + c_next_thickness:
-                            next_penalty_candidates.append(c)
+                            # Check if particle is already within the penalty layer at start of this interval
+                            if c_positions[0] - c_next_thickness <= p_positions[0] <= c_positions[0] + c_next_thickness:
+                                next_penalty_candidates.append(c)
 
-                        # Check if there's a t0 <= t <= t1 for which the particle enters the penalty layer
-                        else:
-                            # Solving two linear equations
-                            denom = ((c_positions[1] - c_positions[0]) / (t1 - t0)) - \
-                                    ((c_positions[1] - c_positions[0]) / (t1 - t0))
-                            if denom != 0:
-                                collision1_t = (p_positions[0] - c_positions[0] - c_next_thickness) / denom
-                                collision2_t = (p_positions[0] - c_positions[0] + c_next_thickness) / denom
+                            # Check if there's a t0 <= t <= t1 for which the particle enters the penalty layer
+                            else:
+                                # Solving two linear equations
+                                denom = ((c_positions[1] - c_positions[0]) / (t1 - t0)) - \
+                                        ((c_positions[1] - c_positions[0]) / (t1 - t0))
+                                if denom != 0:
+                                    collision1_t = (p_positions[0] - c_positions[0] - c_next_thickness) / denom
+                                    collision2_t = (p_positions[0] - c_positions[0] + c_next_thickness) / denom
 
-                                if t0 <= collision1_t <= t1 or t0 <= collision2_t <= t1:
-                                    next_penalty_candidates.append(c)
+                                    if t0 <= collision1_t <= t1 or t0 <= collision2_t <= t1:
+                                        next_penalty_candidates.append(c)
 
             # Initiate rollback
             if len(next_penalty_candidates) > 0:
@@ -255,6 +272,8 @@ class SPACM1DSim:
                     penalty = PenaltyEvent(self.penalty_timestep, c, len(c.active_penalties) + 1)
                     self.eventQ.append((self.start_of_window + penalty.h, penalty))
                     c.active_penalties.append(penalty)
+
+                yield YieldType.TIME_WINDOW_FINISHED_ROLLBACK, self
 
             # Proceed to next rollback window
             else:
@@ -303,11 +322,143 @@ class SPACM1DSim:
                         remove_penalties_from_eventQ(c.active_penalties[innermost_colliding_layer+1:])
                         c.active_penalties = c.active_penalties[:innermost_colliding_layer+1]
 
-            yield self
+                yield YieldType.TIME_WINDOW_FINISHED, self
 
 
-# class PygameVisualizer:
-#     def __init__(self):
-#         self.screen = None
-#
-#     def
+class PygameVisualizer:
+    @dataclass
+    class Camera:
+        """
+        world_length_capture: the screen top to bottom captures this length in world space
+        world_center: The center of the screen maps to this world position
+        """
+        world_length_capture: float
+        world_center: float
+
+    def __init__(self, screen_size: tuple[int, int], sim: SPACM1DSim, zoom_multiplier: float = 1.1, movement_speed: float = 0.1):
+        self.screen = pygame.display.set_mode(screen_size, pygame.DOUBLEBUF)
+        self.clock = pygame.time.Clock()
+        self.sim = sim
+        self.camera = PygameVisualizer.Camera(10, 0)
+        self.screen_size = screen_size
+        self.move_speed = movement_speed
+        self.zoom_mult = zoom_multiplier
+        self.floor_width = 20
+        self.penalty_opacity = 120
+        self.floor_line_thickness = 3
+        self.penalty_line_thickness = 1
+        self.font = pygame.font.SysFont("Arial", 10)
+
+    @staticmethod
+    def world_to_screen_space(screen_dim: float, camera: PygameVisualizer.Camera, world_pos: float):
+        """
+        Invert position to match pygame's screen space axes. Scales and positions based on camera
+
+        @param screen_dim: pygame screen height or width depending on which dimension you are plotting along
+        @param camera: camera object containing capture details
+        @param world_pos: world position of object
+        """
+        return (screen_dim / 2) - (((world_pos - camera.world_center) / camera.world_length_capture) * screen_dim)
+
+    def draw_wall(self, col: Collidable):
+        h = self.world_to_screen_space(self.screen_size[1], self.camera, col.get_latest_position())
+        center_x = self.screen_size[0] // 2
+        pygame.draw.line(self.screen, (0, 0, 0), (center_x - self.floor_width, h), (center_x + self.floor_width, h), self.floor_line_thickness)
+
+    def draw_particle(self, snap: Snapshot):
+        circle_pos = (self.screen_size[0] // 2,
+                            round(self.world_to_screen_space(self.screen_size[1], self.camera, snap.x)))
+        pygame.draw.circle(self.screen, (255, 0, 0), circle_pos, 5)
+        text = self.font.render(f"t={snap.t}", True, (0, 0, 0))
+        self.screen.blit(text, (circle_pos[0] + self.floor_width * 2, circle_pos[1] - (text.get_height() / 2)))
+
+    def draw_penalties(self, col: Collidable):
+        num_pen = len(col.active_penalties)
+        colors = [tuple([int(val * 255) for val in colorsys.hsv_to_rgb(i * (359 / num_pen), 1, 1)] + [120])
+                  for i in range(num_pen)]  # Gets evenly spaced rainbow of colors for each penalty
+
+        for i in range(num_pen):
+            thickness = col.get_lth_thickness(col.active_penalties[i].layer)
+            top = self.world_to_screen_space(self.screen_size[1], self.camera, col.get_latest_position() + thickness)
+            ctr = self.world_to_screen_space(self.screen_size[1], self.camera, col.get_latest_position())
+            bot = self.world_to_screen_space(self.screen_size[1], self.camera, col.get_latest_position() - thickness)
+
+            screen_ctr_x = self.screen_size[1] // 2
+
+            surf = pygame.Surface((self.floor_width, abs(top - bot)), pygame.SRCALPHA, 32)
+            surf.fill(colors[i])
+            self.screen.blit(surf, surf.get_rect(center=(screen_ctr_x, ctr)))
+            pygame.draw.line(self.screen, colors[i][:-1], (screen_ctr_x - self.floor_width * 0.7, top),
+                             (screen_ctr_x + self.floor_width * 0.7, top), self.penalty_line_thickness)
+            pygame.draw.line(self.screen, colors[i][:-1], (screen_ctr_x - self.floor_width * 0.7, bot),
+                             (screen_ctr_x + self.floor_width * 0.7, bot), self.penalty_line_thickness)
+
+    def run(self):
+        running = True
+        s = self.sim.run_sim()
+
+        dragging = None
+
+        while running:
+            self.screen.fill((255, 255, 255))
+
+            for e in pygame.event.get():
+                if e.type == pygame.KEYDOWN:
+                    if e.key == pygame.K_q:
+                        running = False
+                    elif e.key == pygame.K_RIGHT:
+                        typ, _ = next(s)
+                        # while True:
+                        #     typ, _ = next(s)
+                        #     if typ == YieldType.TIME_WINDOW_FINISHED:
+                        #         break
+
+                elif e.type == pygame.MOUSEBUTTONDOWN:
+                    if e.button == pygame.BUTTON_WHEELDOWN:
+                        self.camera.world_length_capture *= self.zoom_mult
+                    elif e.button == pygame.BUTTON_WHEELUP:
+                        self.camera.world_length_capture /= self.zoom_mult
+
+                elif e.type == pygame.QUIT:
+                    running = False
+
+            if pygame.mouse.get_pressed(3)[0]:
+                if dragging is not None:
+                    self.camera.world_center += ((pygame.mouse.get_pos()[1] - dragging) / self.screen_size[1]) * self.camera.world_length_capture
+                dragging = pygame.mouse.get_pos()[1]
+
+            else:
+                if dragging is not None:
+                    dragging = None
+
+            self.camera.world_center += self.move_speed * self.camera.world_length_capture * (int(pygame.key.get_pressed()[pygame.K_w]) - int(pygame.key.get_pressed()[pygame.K_s]))
+
+            for c in self.sim.collideables:
+                self.draw_penalties(c)
+            for p in self.sim.particles:
+                self.draw_particle(p.current_snapshots[-1])
+            for w in self.sim.walls:
+                self.draw_wall(w)
+
+            pygame.display.update()
+
+            self.clock.tick(120)
+
+
+if __name__ == "__main__":
+    sim = SPACM1DSim(0.03, -1, 0.01, [3], [0], [0], [1], 1, 1, 0.01)
+    visualizer = PygameVisualizer((800, 800), sim, 1.1, 0.005)
+    visualizer.run()
+
+# Goals:
+# - Render a set of collideables and particles based on their latest snapshots
+# - Camera zoom and move
+# - scale ruler for sim
+# - snapshot timestamp next to each object
+# - step through sim with keys, or run automatically
+# - set granularity to event-granular or time-window granular
+# - show active penalty layers
+# - show next penalty layers
+
+
+
