@@ -1,6 +1,6 @@
 from __future__ import  annotations
 import pygame
-from matplotlib import pyplot
+from matplotlib import pyplot as plt
 import math
 import numpy
 from dataclasses import dataclass
@@ -77,6 +77,8 @@ class PenaltyEvent(Event):
         self.layer = layer
 
     def get_force(self, target: Particle) -> float:
+        if target is self.owner: return 0
+
         targ_x = target.get_latest_position()
         own_x = self.owner.get_latest_position()
 
@@ -222,6 +224,7 @@ class SPACM1DSim:
             # Checks missed collisions
             next_penalty_candidates: list[Collidable] = []  # Objects whose next penalty layer needs activating
             for c in self.collideables:  # Checking c's penalty layers
+                move_on = False  # Used as a "break" flag to exit loops once c has been added to the list
                 for p in self.particles:  # Moving particles which may have entered a new penalty layer for c
                     if p is not c:  # Don't detect against self, duh
 
@@ -251,14 +254,16 @@ class SPACM1DSim:
                             # Check if there's a t0 <= t <= t1 for which the particle enters the penalty layer
                             else:
                                 # Solving two linear equations
-                                denom = ((c_positions[1] - c_positions[0]) / (t1 - t0)) - \
-                                        ((c_positions[1] - c_positions[0]) / (t1 - t0))
+                                denom = (c_positions[1] - c_positions[0]) - (p_positions[1] - p_positions[0])
                                 if denom != 0:
                                     collision1_t = (p_positions[0] - c_positions[0] - c_next_thickness) / denom
                                     collision2_t = (p_positions[0] - c_positions[0] + c_next_thickness) / denom
 
-                                    if t0 <= collision1_t <= t1 or t0 <= collision2_t <= t1:
+                                    if 0 <= collision1_t <= 1 or 0 <= collision2_t <= 1:
                                         next_penalty_candidates.append(c)
+                                        move_on = True
+                            if move_on: break
+                        if move_on: break
 
             # Initiate rollback
             if len(next_penalty_candidates) > 0:
@@ -273,6 +278,9 @@ class SPACM1DSim:
                     self.eventQ.append((self.start_of_window + penalty.h, penalty))
                     c.active_penalties.append(penalty)
 
+                # Update saved starting event queue
+                self.eventQ_at_start = [(t, e) for t, e in self.eventQ]
+
                 yield YieldType.TIME_WINDOW_FINISHED_ROLLBACK, self
 
             # Proceed to next rollback window
@@ -280,12 +288,7 @@ class SPACM1DSim:
                 # Move old window's snapshots into history
                 for p in self.particles:
                     p.previous_snapshots += p.current_snapshots[:-1]
-                    p.current_snapshots = p.current_snapshots[-1]
-
-                # Update bounds to next window and save event queue state
-                self.start_of_window = self.end_of_window
-                self.end_of_window = self.start_of_window + self.R
-                self.eventQ_at_start = [(t, e) for t, e in self.eventQ]
+                    p.current_snapshots = [p.current_snapshots[-1]]
 
                 # Remove penalties
                 for c in self.collideables:
@@ -311,7 +314,7 @@ class SPACM1DSim:
                                 tups_to_remove.append(tup)
                         for tup in tups_to_remove:
                             self.eventQ.remove(tup)
-                        self.eventQ = heapq.heapify(self.eventQ)
+                        heapq.heapify(self.eventQ)
 
                     # No layer is exerting force, remove all
                     if innermost_colliding_layer is None:
@@ -321,6 +324,11 @@ class SPACM1DSim:
                     else:
                         remove_penalties_from_eventQ(c.active_penalties[innermost_colliding_layer+1:])
                         c.active_penalties = c.active_penalties[:innermost_colliding_layer+1]
+
+                # Update bounds to next window and save event queue state
+                self.start_of_window = self.end_of_window
+                self.end_of_window = self.start_of_window + self.R
+                self.eventQ_at_start = [(t, e) for t, e in self.eventQ]
 
                 yield YieldType.TIME_WINDOW_FINISHED, self
 
@@ -347,7 +355,7 @@ class PygameVisualizer:
         self.penalty_opacity = 120
         self.floor_line_thickness = 3
         self.penalty_line_thickness = 1
-        self.font = pygame.font.SysFont("Arial", 10)
+        self.font = pygame.font.SysFont("Arial", 11)
 
     @staticmethod
     def world_to_screen_space(screen_dim: float, camera: PygameVisualizer.Camera, world_pos: float):
@@ -369,8 +377,10 @@ class PygameVisualizer:
         circle_pos = (self.screen_size[0] // 2,
                             round(self.world_to_screen_space(self.screen_size[1], self.camera, snap.x)))
         pygame.draw.circle(self.screen, (255, 0, 0), circle_pos, 5)
-        text = self.font.render(f"t={snap.t}", True, (0, 0, 0))
+        text = self.font.render(f"t={round(snap.t, 3)}", True, (0, 0, 0))
+        text_height = self.font.render(f"h={round(snap.x, 3)}", True, (0, 0, 0))
         self.screen.blit(text, (circle_pos[0] + self.floor_width * 2, circle_pos[1] - (text.get_height() / 2)))
+        self.screen.blit(text_height, (circle_pos[0] - self.floor_width * 2 - text.get_width(), circle_pos[1] - (text.get_height() / 2)))
 
     def draw_penalties(self, col: Collidable):
         num_pen = len(col.active_penalties)
@@ -398,6 +408,17 @@ class PygameVisualizer:
         s = self.sim.run_sim()
 
         dragging = None
+        auto = False
+        show_penalties = True
+        show_rollbacks = True
+
+        def step():
+            # typ, _ = next(s)
+            while True:
+                typ, _ = next(s)
+                if (typ == YieldType.TIME_WINDOW_FINISHED and not show_rollbacks) or \
+                        ((typ == YieldType.TIME_WINDOW_FINISHED or typ == YieldType.TIME_WINDOW_FINISHED_ROLLBACK) and show_rollbacks):
+                    break
 
         while running:
             self.screen.fill((255, 255, 255))
@@ -406,12 +427,18 @@ class PygameVisualizer:
                 if e.type == pygame.KEYDOWN:
                     if e.key == pygame.K_q:
                         running = False
-                    elif e.key == pygame.K_RIGHT:
-                        typ, _ = next(s)
-                        # while True:
-                        #     typ, _ = next(s)
-                        #     if typ == YieldType.TIME_WINDOW_FINISHED:
-                        #         break
+                    elif e.key == pygame.K_RIGHT and not auto:
+                        step()
+                    elif e.key == pygame.K_a:
+                        auto = not auto
+                    elif e.key == pygame.K_p:
+                        show_penalties = not show_penalties
+                    elif e.key == pygame.K_r:
+                        show_rollbacks = not show_rollbacks
+                    elif e.key == pygame.K_o:
+                        for p in self.sim.particles:
+                            plt.plot([s.x for s in p.previous_snapshots + p.current_snapshots])
+                        plt.show()
 
                 elif e.type == pygame.MOUSEBUTTONDOWN:
                     if e.button == pygame.BUTTON_WHEELDOWN:
@@ -433,8 +460,12 @@ class PygameVisualizer:
 
             self.camera.world_center += self.move_speed * self.camera.world_length_capture * (int(pygame.key.get_pressed()[pygame.K_w]) - int(pygame.key.get_pressed()[pygame.K_s]))
 
-            for c in self.sim.collideables:
-                self.draw_penalties(c)
+            if auto:
+                step()
+
+            if show_penalties:
+                for c in self.sim.collideables:
+                    self.draw_penalties(c)
             for p in self.sim.particles:
                 self.draw_particle(p.current_snapshots[-1])
             for w in self.sim.walls:
@@ -446,7 +477,15 @@ class PygameVisualizer:
 
 
 if __name__ == "__main__":
-    sim = SPACM1DSim(0.03, -1, 0.01, [3], [0], [0], [1], 1, 1, 0.01)
+    # sim = SPACM1DSim(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005)
+    sim = SPACM1DSim(0.03, -1, 0.01, [3, 5], [0, 1], [0], [1, 1], 1, 1, 0.01)  # Working two-particle sim, but bounces are too far
+    # sim = SPACM1DSim(0.03, -1, 0.01, [3, 5, 7], [0, 1, 2], [0, 8], [1, 1, 1], 1, 1, 0.01)  # Working three-particle two-wall sim, but bounces are too far
+
+    # sim = SPACM1DSim(0.03, -1, 0.001, [3, 5, 7], [0, 1, 2], [0], [1, 1, 1], 4, 0.3, 0.001)  # Working two-particle sim, bounces not far, but is slow
+    # sim = SPACM1DSim(0.03, -1, 0.001, [3, 5, 7], [0, 1, 2], [0, 8], [1, 1, 1], 10, 0.4, 0.001)  # Working three-particle two-wall sim, accurate but slow
+
+    # sim = SPACM1DSim(0.03, -1, 0.03, [10], [0], [0], [1], 1, 0.05, 0.03)  # Infinite loop
+
     visualizer = PygameVisualizer((800, 800), sim, 1.1, 0.005)
     visualizer.run()
 
