@@ -71,8 +71,8 @@ class GravityEvent(Event):
 
 class PenaltyEvent(Event):
     """ Single collision penalty layer for a collideable object """
-    def __init__(self, timestep: float, owner: Collidable, layer: int):
-        super().__init__(timestep)
+    def __init__(self, base_timestep: float, owner: Collidable, layer: int):
+        super().__init__(owner.get_lth_timestep(layer, base_timestep))
         self.owner = owner
         self.layer = layer
 
@@ -101,6 +101,9 @@ class Collidable:
 
     def get_lth_stiffness(self, l: int) -> float:
         return self.r1 * (l ** 3)  # ACM paper section 4
+
+    def get_lth_timestep(self, l: int, base_dt: float, fudge=1e-4) -> float:
+        return base_dt / l / math.sqrt(l + fudge)
 
     def get_velocity_changed_timestamps(self, window_start: float, window_end: float) -> set[float]:
         """
@@ -270,7 +273,7 @@ class SPACM1DSim:
                 # Rollback
                 for p in self.particles:
                     p.current_snapshots = [p.current_snapshots[0]]  # Reset snapshots
-                    self.eventQ = [(t, e) for t, e in self.eventQ_at_start]  # Restore initial event queue
+                self.eventQ = [(t, e) for t, e in self.eventQ_at_start]  # Restore initial event queue
 
                 # Engage new penalty layers
                 for c in next_penalty_candidates:
@@ -413,7 +416,7 @@ class PygameVisualizer:
         show_rollbacks = True
 
         def step():
-            # typ, _ = next(s)
+            typ, _ = next(s)
             while True:
                 typ, _ = next(s)
                 if (typ == YieldType.TIME_WINDOW_FINISHED and not show_rollbacks) or \
@@ -486,6 +489,8 @@ if __name__ == "__main__":
 
     # sim = SPACM1DSim(0.03, -1, 0.01, [10], [0], [0], [1], 1, 0.1, 0.01)  # Infinite loop
     # sim = SPACM1DSim(0.03, -1, 0.03, [10], [0], [0], [1], 1, 0.05, 0.03)  # Infinite loop
+
+    sim = SPACM1DSim(0.03, -1, 0.01, [3], [0], [0], [1], 1, 0.5, 0.01)
 
     visualizer = PygameVisualizer((800, 800), sim, 1.1, 0.005)
     visualizer.run()
