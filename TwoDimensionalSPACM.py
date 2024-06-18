@@ -10,36 +10,15 @@ from abc import abstractmethod
 from enum import IntEnum
 import random
 import time
+import numpy as np
 import colorsys
 pygame.init()
 
 
-"""
-Steps:
-- Start sim with params
-- Schedule first gravity force event
-- Record first time window data
-- While events in queue within this time interval R:
-    - Pop event
-    - Integrate position and update vertex ti, xi
-    - Integrate force
-    - Schedule next force event if applicable
-- Advance to end of time window if space left
-- Check missed collisions within time window
-- If missed
-    - Rollback
-    - For each missed collision where object A entered B's next inactive penalty layer
-        - Enable B's next penalty layer by scheduling the first force event affecting all objects
-- Else
-    - Remove any penalty layers exerting 0 force at the end of the time window (detect this by 
-    plugging in the position values at the end of the time window into the penalty force equation and seeing if its 0)
-"""
-
-
 @dataclass(unsafe_hash=True)
 class Snapshot:
-    x: float
-    v: float
+    x: np.array
+    v: np.array
     t: float
     energy: Optional[float]
     has_velocity_changed: bool
@@ -183,7 +162,7 @@ class SPACM1DSim:
     def __init__(self, rollback_window_size: float, accel_gravity: float, timestep_gravity: float,
                  particle_positions: list[float], particle_velocities: list[float], wall_positions: list[float],
                  particle_masses: list[float], collision_stiffness: float, penalty_layer_thickness: float,
-                 penalty_timestep: float, compute_energy:bool=True, gravity_energy_base:float=-10):
+                 penalty_timestep: float):
         assert len(particle_positions) == len(particle_velocities)
 
         self.past_events: list[tuple[float, Event]] = []  # History for logging
@@ -192,8 +171,6 @@ class SPACM1DSim:
         self.penalty_timestep = penalty_timestep
 
         self.eventQ: list[tuple[float, Event]] = []
-
-        self.accel_gravity = accel_gravity
 
         # Schedule first gravity event
         heapq.heappush(self.eventQ, (timestep_gravity, GravityEvent(timestep_gravity, accel_gravity)))
@@ -209,9 +186,6 @@ class SPACM1DSim:
                                                           penalty_layer_thickness,
                                                           p) for p in wall_positions]
         self.collideables: list[Collidable] = self.walls + self.particles
-
-        self.do_compute_energy = compute_energy  # Should energy be tracked at each snapshot
-        self.gravity_base = gravity_energy_base  # Vertical position of "ground" relative to which to compute gravitational energy
 
     def run_sim(self):
         while True:
@@ -234,14 +208,6 @@ class SPACM1DSim:
                     # Update placeholder v and has_velocity_changed values
                     pc.has_velocity_changed = p0.v != v1
                     pc.v = v1
-
-                    # Update energy
-                    Eg = p.mass * self.accel_gravity * (pc.x - self.gravity_base)  # E_gravity = mgh
-                    Ek = 0.5 * p.mass * (pc.v ** 2)  # E_kinetic = 1/2 mv^2
-                    Ep = 0
-                    for c in self.collideables:
-                        c.active_penalties  # TODO: Continue here
-
 
                 heapq.heappush(self.eventQ, (te + e.h, e))  # Schedule next force event
 
