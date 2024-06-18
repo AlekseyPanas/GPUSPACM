@@ -45,6 +45,18 @@ class Snapshot:
     has_velocity_changed: bool
 
 
+def get_next_time(start_time: float, dt: float, cur_time: float):
+    """
+    :param start_time: time when this clock started ticking
+    :param dt: timestep of globally ticking clock
+    :param cur_time: the current timestamp
+    :return: the time of the next tick of a global clock that ticked from start_time at intervals of dt. for example,
+    get_next_time(0, 3, 7) returns 9 because the global clock ticks at 3, 6, 9, ..., and 9 is the next tick after 7.
+    the returned timestamp excludes cur_time, so get_next_time(0, 2, 4) returns 6 and not 4
+    """
+    return start_time + ((((cur_time - start_time) // dt) + 1) * dt)
+
+
 class Event:
     """ Recurring event applying force to all particles in the simulation """
     def __init__(self, timestep: float):
@@ -286,7 +298,7 @@ class SPACM1DSim:
                 # Engage new penalty layers
                 for c in next_penalty_candidates:
                     penalty = PenaltyEvent(self.penalty_timestep, c, len(c.active_penalties) + 1)
-                    self.eventQ.append((self.start_of_window + penalty.h, penalty))
+                    self.eventQ.append((get_next_time(0, penalty.h, self.start_of_window), penalty))
                     c.active_penalties.append(penalty)
 
                 # Update saved starting event queue
@@ -539,6 +551,7 @@ class TimelineVisualizer:
         self.cam = Camera(sim.R * 10, 0)
         self.dims = timeline_surface_dims
         self.font = pygame.font.SysFont("Arial", 11)
+        self.tick_max_width = 10
 
     def draw_tick(self, surf: pygame.Surface, screen_pos: tuple[int, int], width: int, thickness: int,
                   color: tuple[int, int, int], label: str, t: float):
@@ -546,9 +559,9 @@ class TimelineVisualizer:
                          (screen_pos[0] + width / 2, screen_pos[1]), thickness)
         text_label = self.font.render(label, True, color)
         text_time = self.font.render(str(round(t, 3)), True, (0, 0, 0))
-        surf.blit(text_label, (screen_pos[0] + (width / 2) + 2,
+        surf.blit(text_label, (screen_pos[0] + (width / 2) + 2 + self.tick_max_width,
                                screen_pos[1] - (text_label.get_height() / 2)))
-        surf.blit(text_time, (screen_pos[0] - (width / 2) - 2 - text_time.get_width(),
+        surf.blit(text_time, (screen_pos[0] - (width / 2) - 2 - text_time.get_width() - self.tick_max_width,
                               screen_pos[1] - (text_label.get_height() / 2)))
 
     def zoom(self, multiplier: float):
@@ -563,8 +576,8 @@ class TimelineVisualizer:
     def render(self, sim: SPACM1DSim) -> pygame.Surface:
         window_size = sim.R
         left_padding = 0
-        tick_max_width = 10
-        tick_pos = int(left_padding + (self.font.get_height() * 5) + (tick_max_width / 2))
+
+        tick_pos = int(left_padding + (self.font.get_height() * 5) + (self.tick_max_width / 2))
 
         surf = pygame.Surface(self.dims, pygame.SRCALPHA, 32)
         pygame.draw.line(surf, (0, 0, 0), (tick_pos, 0), (tick_pos, self.dims[1]), 2)
@@ -574,15 +587,15 @@ class TimelineVisualizer:
             if 0 <= pos <= self.dims[1]:
                 if isinstance(e, PenaltyEvent):
                     self.draw_tick(surf, (tick_pos, int(self.cam.world_to_screen_space(self.dims[1], t))),
-                                   int(tick_max_width // 1.5), 3, (190, 0, 0), f"Pen:L{e.layer}:I{e.owner.obj_id}", t)
+                                   int(self.tick_max_width // 1.5), 3, (190, 0, 0), f"Pen:L{e.layer}:I{e.owner.obj_id}", t)
                 else:
                     self.draw_tick(surf, (tick_pos, int(self.cam.world_to_screen_space(self.dims[1], t))),
-                                   int(tick_max_width // 1.5), 3, (0, 0, 190), f"{type(e).__name__}", t)
+                                   int(self.tick_max_width // 1.5), 3, (0, 0, 190), f"{type(e).__name__}", t)
 
         for i in range(int(self.cam.screen_to_world_space(self.dims[1], self.dims[1]) // window_size),
                        int(self.cam.screen_to_world_space(self.dims[1], 0) // window_size) + 1):
             self.draw_tick(surf, (tick_pos, int(self.cam.world_to_screen_space(self.dims[1], i * window_size))),
-                           tick_max_width, 5, (0, 0, 0), "R", i * window_size)
+                           self.tick_max_width, 5, (0, 0, 0), "R", i * window_size)
 
         if len(sim.past_events):
             pygame.draw.circle(surf, (255, 0, 0), (tick_pos, self.cam.world_to_screen_space(self.dims[1], sim.past_events[-1][0])), 5)
