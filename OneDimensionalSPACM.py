@@ -88,13 +88,20 @@ class PenaltyEvent(Event):
         self.owner = owner
         self.layer = layer
 
+    def get_gap(self, q: float):
+        """Return gap function g(q) for a particle position q"""
+        return abs(self.owner.get_latest_position() - q) - self.owner.get_lth_thickness(self.layer)
+
     def get_force(self, target: Particle) -> float:
         if target is self.owner: return 0
 
+        # the latest position is guaranteed to be at an equal timestep because SPACM sim code always updates
+        # positions of EVERY particle before computing forces. If stencils are ever implemented this may no
+        # longer be the case
         targ_x = target.get_latest_position()
         own_x = self.owner.get_latest_position()
 
-        gap = abs(own_x - targ_x) - self.owner.get_lth_thickness(self.layer)
+        gap = self.get_gap(targ_x)
         if gap > 0:
             return 0
         else:
@@ -183,7 +190,7 @@ class SPACM1DSim:
     def __init__(self, rollback_window_size: float, accel_gravity: float, timestep_gravity: float,
                  particle_positions: list[float], particle_velocities: list[float], wall_positions: list[float],
                  particle_masses: list[float], collision_stiffness: float, penalty_layer_thickness: float,
-                 penalty_timestep: float, compute_energy:bool=True, gravity_energy_base:float=-10):
+                 penalty_timestep: float, compute_energy: bool = True, gravity_energy_base: float = -10):
         assert len(particle_positions) == len(particle_velocities)
 
         self.past_events: list[tuple[float, Event]] = []  # History for logging
@@ -236,12 +243,18 @@ class SPACM1DSim:
                     pc.v = v1
 
                     # Update energy
-                    Eg = p.mass * self.accel_gravity * (pc.x - self.gravity_base)  # E_gravity = mgh
-                    Ek = 0.5 * p.mass * (pc.v ** 2)  # E_kinetic = 1/2 mv^2
-                    Ep = 0
-                    for c in self.collideables:
-                        c.active_penalties  # TODO: Continue here
-
+                    if self.do_compute_energy:
+                        Eg = p.mass * abs(self.accel_gravity) * (pc.x - self.gravity_base)  # E_gravity = mgh
+                        Ek = 0.5 * p.mass * (pc.v ** 2)  # E_kinetic = 1/2 mv^2
+                        Ep = 0
+                        for c in self.collideables:
+                            if c is not p:
+                                for pen in c.active_penalties:
+                                    gap = pen.get_gap(p.get_latest_position())
+                                    if gap <= 0:
+                                        Ep += 0.5 * c.get_lth_stiffness(pen.layer) * (gap ** 2)
+                        Etotal = Eg + Ek + Ep
+                        pc.energy = Etotal
 
                 heapq.heappush(self.eventQ, (te + e.h, e))  # Schedule next force event
 
@@ -462,6 +475,7 @@ class PygameVisualizer:
         granularity = 0
         is_dragging_timeline = False
         do_adjust_timeline = True
+        show_timeline = True
 
         def step():
             while True:
@@ -491,10 +505,21 @@ class PygameVisualizer:
                         granularity = (granularity + 1) % 3
                     elif e.key == pygame.K_o:
                         for p in self.sim.particles:
-                            plt.plot([s.x for s in p.previous_snapshots + p.current_snapshots])
+                            plt.plot([s.t for s in p.previous_snapshots + p.current_snapshots],
+                                     [s.x for s in p.previous_snapshots + p.current_snapshots])
+                        plt.xlabel("Time")
+                        plt.ylabel("Particle Height")
+                        plt.show()
+                        for p in self.sim.particles:
+                            plt.plot([s.t for s in p.previous_snapshots + p.current_snapshots],
+                                     [s.energy for s in p.previous_snapshots + p.current_snapshots])
+                        plt.xlabel("Time")
+                        plt.ylabel("Particle Energy")
                         plt.show()
                     elif e.key == pygame.K_t:
                         do_adjust_timeline = not do_adjust_timeline
+                    elif e.key == pygame.K_h:
+                        show_timeline = not show_timeline
 
                 elif e.type == pygame.MOUSEBUTTONDOWN:
                     if e.button == pygame.BUTTON_WHEELDOWN:
@@ -540,7 +565,8 @@ class PygameVisualizer:
             for w in self.sim.walls:
                 self.draw_wall(w)
 
-            self.screen.blit(self.timeline_renderer.render(self.sim), (0, 0))
+            if show_timeline:
+                self.screen.blit(self.timeline_renderer.render(self.sim), (0, 0))
 
             padding = 3
             y = padding
@@ -549,7 +575,8 @@ class PygameVisualizer:
                 self.settings_font.render(f"(R) Granularity: {event_granularities[granularity]}", True, (0, 0, 0)),
                 self.settings_font.render(f"(P) Show Penalty Layers: {show_penalties}", True, (0, 0, 0)),
                 self.settings_font.render(f"(A) Auto Run: {auto}", True, (0, 0, 0)),
-                self.settings_font.render(f"(T) Adjust Timeline: {do_adjust_timeline}", True, (0, 0, 0))
+                self.settings_font.render(f"(T) Adjust Timeline: {do_adjust_timeline}", True, (0, 0, 0)),
+                self.settings_font.render(f"(H) Show Timeline: {show_timeline}", True, (0, 0, 0))
             ):
                 self.screen.blit(text, (self.screen_size[0] - text.get_width() - padding, y))
                 y += text.get_height() + padding
@@ -627,7 +654,7 @@ if __name__ == "__main__":
     # sim = SPACM1DSim(0.03, -1, 0.01, [10], [0], [0], [1], 1, 0.1, 0.01)  # Infinite loop
     # sim = SPACM1DSim(0.03, -1, 0.03, [10], [0], [0], [1], 1, 0.05, 0.03)  # Infinite loop
 
-    sim = SPACM1DSim(0.03, -1, 0.01, [3], [0], [0], [1], 1, 0.5, 0.01)
+    sim = SPACM1DSim(0.03, -1, 0.01, [3], [0], [0], [1], 1, 0.5, 0.01, True, 0)
 
     visualizer = PygameVisualizer((800, 800), sim, 1.1, 0.005)
     visualizer.run()
