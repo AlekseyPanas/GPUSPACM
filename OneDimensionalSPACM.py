@@ -1,4 +1,6 @@
 from __future__ import  annotations
+
+import numpy as np
 import pygame
 from matplotlib import pyplot as plt
 import math
@@ -11,6 +13,8 @@ from enum import IntEnum
 import random
 import time
 import colorsys
+from tensorboardX import SummaryWriter
+from datetime import datetime
 pygame.init()
 
 
@@ -186,12 +190,94 @@ class YieldType(IntEnum):
     TIME_WINDOW_FINISHED_ROLLBACK = 2
 
 
+class Logger:
+    @abstractmethod
+    def rollback(self):
+        """Notifies the logger that a rollback has occurred. Subsequent datapoints will start in overlap"""
+
+    @abstractmethod
+    def record_snapshots(self, snapshots: list[Snapshot]):
+        """Record a new list of snapshots for every particle. The particle order in the given snapshots list is
+        maintained across all calls"""
+
+    @abstractmethod
+    def output_data(self):
+        """Output current data. This may be called multiple times in the same simulation"""
+
+
+class TensorboardLogger(Logger):
+    def __init__(self, do_log=True, custom_experiment_prefix=""):
+        self.do_log = do_log
+        self.cur_rollback = 0
+        self.num_particles = -1
+
+        self.folder_name = f"runs/{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}"
+
+        self.output_number = 0  # For multiple outputs in the same simulation, differentiates ID
+
+        self.positions: list[list[float]] = []  # vectors of each particle's pos at corresponding self.times index
+        self.velocities: list[list[float]] = []  # vectors of each particle's vel at corresponding self.times index
+        self.energies: list[list[float]] = []  # vectors of each particle's energy at corresponding self.times index
+        self.rollback_numbers: list[int] = []  # stores each datapoints corresponding rollback number
+        self.times: list[float] = []  # stores timestamps of data recording
+
+    def rollback(self):
+        if not self.do_log: return
+
+        self.cur_rollback += 1
+
+    def record_snapshots(self, snapshots: list[Snapshot]):
+        if not self.do_log: return
+
+        # Every snapshot should have the same, so taking it at [0] is arbitrary
+        self.times.append(snapshots[0].t)
+
+        self.positions.append([s.x for s in snapshots])
+        self.velocities.append([s.v for s in snapshots])
+        self.energies.append([s.energy for s in snapshots])
+
+        self.rollback_numbers.append(self.cur_rollback)
+
+        if self.num_particles == -1: self.num_particles = len(snapshots)
+
+    def output_data(self):
+        if not self.do_log: return
+
+        writer = SummaryWriter(self.folder_name + f"-{self.output_number}")
+
+        # All the lists should be the same length so choosing self.positions is arbitrary
+        for i in range(len(self.positions)):
+            for p in range(len(self.positions[i])):
+                writer.add_scalar(f"PosP{p}/{self.rollback_numbers[i]}", self.positions[i][p], int(self.times[i] * 100000))
+                writer.add_scalar(f"VelP{p}/{self.rollback_numbers[i]}", self.velocities[i][p], int(self.times[i] * 100000))
+                writer.add_scalar(f"EnergyP{p}/{self.rollback_numbers[i]}", self.energies[i][p], int(self.times[i] * 100000))
+
+        layout = {
+            f"SimulationP{p}": {
+                f"PosP{p}": ["Multiline", [f"PosP{p}/{i}" for i in range(self.cur_rollback + 1)]],
+                f"VelP{p}": ["Multiline", [f"VelP{p}/{i}" for i in range(self.cur_rollback + 1)]],
+                f"EnergyP{p}": ["Multiline", [f"EnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]]
+            } for p in range(self.num_particles)
+        }
+
+        print(self.rollback_numbers)
+        print(layout)
+
+        writer.add_custom_scalars(layout)
+        writer.close()
+
+        self.output_number += 1
+
+
 class SPACM1DSim:
     def __init__(self, rollback_window_size: float, accel_gravity: float, timestep_gravity: float,
                  particle_positions: list[float], particle_velocities: list[float], wall_positions: list[float],
                  particle_masses: list[float], collision_stiffness: float, penalty_layer_thickness: float,
-                 penalty_timestep: float, compute_energy: bool = True, gravity_energy_base: float = -10):
+                 penalty_timestep: float, logger: Logger, compute_energy: bool = True,
+                 gravity_energy_base: float = -10):
         assert len(particle_positions) == len(particle_velocities)
+
+        self.logger = logger
 
         self.past_events: list[tuple[float, Event]] = []  # History for logging
 
@@ -236,6 +322,8 @@ class SPACM1DSim:
                 for p in self.particles:
                     p0 = p.current_snapshots[-2]
                     pc = p.current_snapshots[-1]
+
+                    v1_5 = p0.v + (e.h / 2) * (e.get_force(p) / p.mass)  # record energy at halfway vel update
                     v1 = p0.v + e.h * (e.get_force(p) / p.mass)  # integrate force with respect to force's timestep
 
                     # Update placeholder v and has_velocity_changed values
@@ -245,7 +333,7 @@ class SPACM1DSim:
                     # Update energy
                     if self.do_compute_energy:
                         Eg = p.mass * abs(self.accel_gravity) * (pc.x - self.gravity_base)  # E_gravity = mgh
-                        Ek = 0.5 * p.mass * (pc.v ** 2)  # E_kinetic = 1/2 mv^2
+                        Ek = 0.5 * p.mass * (v1_5 ** 2)  # E_kinetic = 1/2 mv^2
                         Ep = 0
                         for c in self.collideables:
                             if c is not p:
@@ -255,6 +343,9 @@ class SPACM1DSim:
                                         Ep += 0.5 * c.get_lth_stiffness(pen.layer) * (gap ** 2)
                         Etotal = Eg + Ek + Ep
                         pc.energy = Etotal
+
+                # Event-granular log: latest snapshot of all particles
+                self.logger.record_snapshots([p.current_snapshots[-1] for p in self.particles])
 
                 heapq.heappush(self.eventQ, (te + e.h, e))  # Schedule next force event
 
@@ -330,6 +421,9 @@ class SPACM1DSim:
                 # Update saved starting event queue
                 self.eventQ_at_start = [(t, e) for t, e in self.eventQ]
 
+                # Notify logger that rollback has occurred
+                self.logger.rollback()
+
                 yield YieldType.TIME_WINDOW_FINISHED_ROLLBACK, self
 
             # Proceed to next rollback window
@@ -380,6 +474,9 @@ class SPACM1DSim:
                 self.eventQ_at_start = [(t, e) for t, e in self.eventQ]
 
                 yield YieldType.TIME_WINDOW_FINISHED, self
+
+    def output_log_data(self):
+        self.logger.output_data()
 
 
 @dataclass
@@ -504,18 +601,20 @@ class PygameVisualizer:
                     elif e.key == pygame.K_r:
                         granularity = (granularity + 1) % 3
                     elif e.key == pygame.K_o:
-                        for p in self.sim.particles:
-                            plt.plot([s.t for s in p.previous_snapshots + p.current_snapshots],
-                                     [s.x for s in p.previous_snapshots + p.current_snapshots])
-                        plt.xlabel("Time")
-                        plt.ylabel("Particle Height")
-                        plt.show()
-                        for p in self.sim.particles:
-                            plt.plot([s.t for s in p.previous_snapshots + p.current_snapshots],
-                                     [s.energy for s in p.previous_snapshots + p.current_snapshots])
-                        plt.xlabel("Time")
-                        plt.ylabel("Particle Energy")
-                        plt.show()
+                        # for p in self.sim.particles:
+                        #     plt.plot([s.t for s in p.previous_snapshots + p.current_snapshots],
+                        #              [s.x for s in p.previous_snapshots + p.current_snapshots])
+                        # plt.xlabel("Time")
+                        # plt.ylabel("Particle Height")
+                        # plt.show()
+                        # for p in self.sim.particles:
+                        #     plt.plot([s.t for s in p.previous_snapshots + p.current_snapshots],
+                        #              [s.energy for s in p.previous_snapshots + p.current_snapshots])
+                        # plt.xlabel("Time")
+                        # plt.ylabel("Particle Energy")
+                        # plt.show()
+                        self.sim.output_log_data()
+                        # TODO: Remove past_snapshot log in particles
                     elif e.key == pygame.K_t:
                         do_adjust_timeline = not do_adjust_timeline
                     elif e.key == pygame.K_h:
@@ -644,7 +743,14 @@ class TimelineVisualizer:
 
 
 if __name__ == "__main__":
-    # sim = SPACM1DSim(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005)
+    # for i in range(10):
+    #     writer.add_scalar("plot1", math.log((i+1) * 50), i)
+    # for i in range(5, 10):
+    #     writer.add_scalar("plot1", math.log((i + 1) * 70), i)
+
+    logger = TensorboardLogger(True, "LoggingTest")
+
+    sim = SPACM1DSim(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, logger)
     # sim = SPACM1DSim(0.03, -1, 0.01, [3, 5], [0, 1], [0], [1, 1], 1, 1, 0.01)  # Working two-particle sim, but bounces are too far
     # sim = SPACM1DSim(0.03, -1, 0.01, [3, 5, 7], [0, 1, 2], [0, 8], [1, 1, 1], 1, 1, 0.01)  # Working three-particle two-wall sim, but bounces are too far
 
@@ -654,7 +760,12 @@ if __name__ == "__main__":
     # sim = SPACM1DSim(0.03, -1, 0.01, [10], [0], [0], [1], 1, 0.1, 0.01)  # Infinite loop
     # sim = SPACM1DSim(0.03, -1, 0.03, [10], [0], [0], [1], 1, 0.05, 0.03)  # Infinite loop
 
-    sim = SPACM1DSim(0.03, -1, 0.01, [3], [0], [0], [1], 1, 0.5, 0.01, True, 0)
+    #sim = SPACM1DSim(0.03, -1, 0.01, [6], [0], [0], [1], 1, 0.5, 0.01, True, 0)
+    #sim = SPACM1DSim(0.03, -1, 0.01, [3], [0], [0], [1], 1, 0.5, 0.01, True, 0)
+    #sim = SPACM1DSim(0.03, -1, 0.01, [2], [0], [0], [1], 1, 0.5, 0.01, True, 0)
+    #sim = SPACM1DSim(0.03, -1, 0.01, [1], [0], [0], [1], 1, 0.5, 0.01, True, 0)
+    #sim = SPACM1DSim(0.03, -1, 0.01, [0.2], [0], [0], [1], 1, 0.5, 0.01, True, 0)
+    #sim = SPACM1DSim(0.03, -1, 0.01, [6000], [0], [0], [1], 1, 0.5, 0.01, TensorboardLogger(True, "LoggingTest"), True, 0)
 
     visualizer = PygameVisualizer((800, 800), sim, 1.1, 0.005)
     visualizer.run()
