@@ -1,4 +1,6 @@
 from __future__ import  annotations
+
+import numpy as np
 import pygame
 from matplotlib import pyplot as plt
 import math
@@ -10,15 +12,16 @@ from abc import abstractmethod
 from enum import IntEnum
 import random
 import time
-import numpy as np
 import colorsys
+from tensorboardX import SummaryWriter
+from datetime import datetime
 pygame.init()
 
 
 @dataclass(unsafe_hash=True)
 class Snapshot:
-    x: np.array
-    v: np.array
+    x: float
+    v: float
     t: float
     energy: Optional[float]
     has_velocity_changed: bool
@@ -60,6 +63,27 @@ class GravityEvent(Event):
         return target.mass * self.g
 
 
+class InfinitePenaltyEvent(Event):
+    """Infinitely large penalty layer active below some threshold"""
+    def __init__(self, thresh: float, timestep: float, stiffness: float):
+        super().__init__(timestep)
+        self.thresh = thresh
+        self.stiffness = stiffness
+
+    def get_gap(self, q: float):
+        return q - self.thresh
+
+    def get_force(self, target: Particle):
+        gap = target.get_latest_position() - self.thresh
+        if gap <= 0:
+            return self.stiffness * abs(gap)
+        else:
+            return 0
+
+    def get_stiffness(self):
+        return self.stiffness
+
+
 class PenaltyEvent(Event):
     """ Single collision penalty layer for a collideable object """
     def __init__(self, base_timestep: float, owner: Collidable, layer: int):
@@ -67,13 +91,20 @@ class PenaltyEvent(Event):
         self.owner = owner
         self.layer = layer
 
+    def get_gap(self, q: float):
+        """Return gap function g(q) for a particle position q"""
+        return abs(self.owner.get_latest_position() - q) - self.owner.get_lth_thickness(self.layer)
+
     def get_force(self, target: Particle) -> float:
         if target is self.owner: return 0
 
+        # the latest position is guaranteed to be at an equal timestep because SPACM sim code always updates
+        # positions of EVERY particle before computing forces. If stencils are ever implemented this may no
+        # longer be the case
         targ_x = target.get_latest_position()
         own_x = self.owner.get_latest_position()
 
-        gap = abs(own_x - targ_x) - self.owner.get_lth_thickness(self.layer)
+        gap = self.get_gap(targ_x)
         if gap > 0:
             return 0
         else:
@@ -158,12 +189,91 @@ class YieldType(IntEnum):
     TIME_WINDOW_FINISHED_ROLLBACK = 2
 
 
+class Logger:
+    @abstractmethod
+    def rollback(self):
+        """Notifies the logger that a rollback has occurred. Subsequent datapoints will start in overlap"""
+
+    @abstractmethod
+    def record_snapshots(self, snapshots: list[Snapshot]):
+        """Record a new list of snapshots for every particle. The particle order in the given snapshots list is
+        maintained across all calls"""
+
+    @abstractmethod
+    def output_data(self):
+        """Output current data. This may be called multiple times in the same simulation"""
+
+
+class TensorboardLogger(Logger):
+    def __init__(self, do_log=True, custom_experiment_prefix=""):
+        self.do_log = do_log
+        self.cur_rollback = 0
+        self.num_particles = -1
+
+        self.folder_name = f"runs/{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}"
+
+        self.output_number = 0  # For multiple outputs in the same simulation, differentiates ID
+
+        self.positions: list[list[float]] = []  # vectors of each particle's pos at corresponding self.times index
+        self.velocities: list[list[float]] = []  # vectors of each particle's vel at corresponding self.times index
+        self.energies: list[list[float]] = []  # vectors of each particle's energy at corresponding self.times index
+        self.rollback_numbers: list[int] = []  # stores each datapoints corresponding rollback number
+        self.times: list[float] = []  # stores timestamps of data recording
+
+    def rollback(self):
+        if not self.do_log: return
+
+        self.cur_rollback += 1
+
+    def record_snapshots(self, snapshots: list[Snapshot]):
+        if not self.do_log: return
+
+        # Every snapshot should have the same, so taking it at [0] is arbitrary
+        self.times.append(snapshots[0].t)
+
+        self.positions.append([s.x for s in snapshots])
+        self.velocities.append([s.v for s in snapshots])
+        self.energies.append([s.energy for s in snapshots])
+
+        self.rollback_numbers.append(self.cur_rollback)
+
+        if self.num_particles == -1: self.num_particles = len(snapshots)
+
+    def output_data(self):
+        if not self.do_log: return
+
+        writer = SummaryWriter(self.folder_name + f"-{self.output_number}")
+
+        # All the lists should be the same length so choosing self.positions is arbitrary
+        for i in range(len(self.positions)):
+            for p in range(len(self.positions[i])):
+                writer.add_scalar(f"PosP{p}/{self.rollback_numbers[i]}", self.positions[i][p], int(self.times[i] * 100000))
+                writer.add_scalar(f"VelP{p}/{self.rollback_numbers[i]}", self.velocities[i][p], int(self.times[i] * 100000))
+                writer.add_scalar(f"EnergyP{p}/{self.rollback_numbers[i]}", self.energies[i][p], int(self.times[i] * 100000))
+
+        layout = {
+            f"SimulationP{p}": {
+                f"PosP{p}": ["Multiline", [f"PosP{p}/{i}" for i in range(self.cur_rollback + 1)]],
+                f"VelP{p}": ["Multiline", [f"VelP{p}/{i}" for i in range(self.cur_rollback + 1)]],
+                f"EnergyP{p}": ["Multiline", [f"EnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]]
+            } for p in range(self.num_particles)
+        }
+
+        writer.add_custom_scalars(layout)
+        writer.close()
+
+        self.output_number += 1
+
+
 class SPACM1DSim:
     def __init__(self, rollback_window_size: float, accel_gravity: float, timestep_gravity: float,
-                 particle_positions: list[float], particle_velocities: list[float], wall_positions: list[float],
+                 particle_positions: list[float], particle_velocities: list[float],
                  particle_masses: list[float], collision_stiffness: float, penalty_layer_thickness: float,
-                 penalty_timestep: float):
+                 penalty_timestep: float, logger: Logger, compute_energy: bool = True,
+                 gravity_energy_base: float = -10):
         assert len(particle_positions) == len(particle_velocities)
+
+        self.logger = logger
 
         self.past_events: list[tuple[float, Event]] = []  # History for logging
 
@@ -172,8 +282,13 @@ class SPACM1DSim:
 
         self.eventQ: list[tuple[float, Event]] = []
 
+        self.accel_gravity = accel_gravity
+
+        self.inf_penalty_event = InfinitePenaltyEvent(0, penalty_timestep, 1)
         # Schedule first gravity event
         heapq.heappush(self.eventQ, (timestep_gravity, GravityEvent(timestep_gravity, accel_gravity)))
+        # Schedule infinite penalty
+        heapq.heappush(self.eventQ, (penalty_timestep, self.inf_penalty_event))
 
         self.start_of_window = 0
         self.end_of_window = self.R
@@ -182,157 +297,54 @@ class SPACM1DSim:
         self.particles: list[Particle] = [Particle(collision_stiffness, penalty_layer_thickness,
                                                    particle_positions[i], particle_velocities[i],
                                                    0, particle_masses[i]) for i in range(len(particle_positions))]
-        self.walls: list[Collidable] = [Collidable(collision_stiffness,
-                                                          penalty_layer_thickness,
-                                                          p) for p in wall_positions]
-        self.collideables: list[Collidable] = self.walls + self.particles
+
+        self.do_compute_energy = compute_energy  # Should energy be tracked at each snapshot
+        self.gravity_base = gravity_energy_base  # Vertical position of "ground" relative to which to compute gravitational energy
 
     def run_sim(self):
         while True:
-            while self.eventQ[0][0] <= self.end_of_window:
-                te, e = heapq.heappop(self.eventQ)  # time, event
+            te, e = heapq.heappop(self.eventQ)  # time, event
 
-                for p in self.particles:
-                    p0 = p.current_snapshots[-1]
-
-                    x1 = p0.x + ((te - p0.t) * p0.v)  # integrate position up to this event
-                    t1 = te  # update to new time
-
-                    p.current_snapshots.append(Snapshot(x1, -1, t1, None, False))  # Add new snapshot with placeholder v and has_velocity_changed
-
-                for p in self.particles:
-                    p0 = p.current_snapshots[-2]
-                    pc = p.current_snapshots[-1]
-                    v1 = p0.v + e.h * (e.get_force(p) / p.mass)  # integrate force with respect to force's timestep
-
-                    # Update placeholder v and has_velocity_changed values
-                    pc.has_velocity_changed = p0.v != v1
-                    pc.v = v1
-
-                heapq.heappush(self.eventQ, (te + e.h, e))  # Schedule next force event
-
-                self.past_events.append((te, e))  # Record processed event
-
-                yield YieldType.EVENT_FINISHED, self
-
-            # Linearly update particle positions and timestamps to the end of the rollback window
             for p in self.particles:
                 p0 = p.current_snapshots[-1]
-                if p0.t < self.end_of_window:
-                    x1 = p0.x + ((self.end_of_window - p0.t) * p0.v)
-                    t1 = self.end_of_window
-                    p.current_snapshots.append(Snapshot(x1, p0.v, t1, None, False))
 
-            # Checks missed collisions
-            next_penalty_candidates: list[Collidable] = []  # Objects whose next penalty layer needs activating
-            for c in self.collideables:  # Checking c's penalty layers
-                move_on = False  # Used as a "break" flag to exit loops once c has been added to the list
-                for p in self.particles:  # Moving particles which may have entered a new penalty layer for c
-                    if p is not c:  # Don't detect against self, duh
+                x1 = p0.x + ((te - p0.t) * p0.v)  # integrate position up to this event
+                t1 = te  # update to new time
 
-                        # All snapshots where p or c had a velocity change (guaranteed to also include the first and snapshot
-                        # of this rollback window)
-                        velocity_changed_timestamps = sorted(
-                                c.get_velocity_changed_timestamps(self.start_of_window,
-                                                                  self.end_of_window).union(
-                                p.get_velocity_changed_timestamps(self.start_of_window, self.end_of_window)))
+                p.current_snapshots.append(
+                    Snapshot(x1, -1, t1, None, False))  # Add new snapshot with placeholder v and has_velocity_changed
 
-                        # Loop through intervals between above snapshots
-                        for i in range(len(velocity_changed_timestamps) - 1):
-                            # Get thickness of c's next inactive penalty layer
-                            c_next_thickness = c.get_lth_thickness(len(c.active_penalties) + 1)
+            for p in self.particles:
+                p0 = p.current_snapshots[-2]
+                pc = p.current_snapshots[-1]
 
-                            # interval time bounds
-                            t0 = velocity_changed_timestamps[i]
-                            t1 = velocity_changed_timestamps[i+1]
+                v1_5 = p0.v + (e.h / 2) * (e.get_force(p) / p.mass)  # record energy at halfway vel update
+                v1 = p0.v + e.h * (e.get_force(p) / p.mass)  # integrate force with respect to force's timestep
 
-                            c_positions = [c.get_pos_at_time(t0), c.get_pos_at_time(t1)]
-                            p_positions = [p.get_pos_at_time(t0), p.get_pos_at_time(t1)]
+                # Update placeholder v and has_velocity_changed values
+                pc.has_velocity_changed = p0.v != v1
+                pc.v = v1
 
-                            # Check if particle is already within the penalty layer at start of this interval
-                            if c_positions[0] - c_next_thickness <= p_positions[0] <= c_positions[0] + c_next_thickness:
-                                next_penalty_candidates.append(c)
+                # Update energy
+                if self.do_compute_energy:
+                    Eg = p.mass * abs(self.accel_gravity) * (pc.x - self.gravity_base)  # E_gravity = mgh
+                    Ek = 0.5 * p.mass * (v1_5 ** 2)  # E_kinetic = 1/2 mv^2
+                    gap = self.inf_penalty_event.get_gap(p.get_latest_position())
+                    Ep = 0 if gap > 0 else 0.5 * self.inf_penalty_event.get_stiffness() * (gap ** 2)
+                    Etotal = Eg + Ek + Ep
+                    pc.energy = Etotal
 
-                            # Check if there's a t0 <= t <= t1 for which the particle enters the penalty layer
-                            else:
-                                # Solving two linear equations
-                                denom = (c_positions[1] - c_positions[0]) - (p_positions[1] - p_positions[0])
-                                if denom != 0:
-                                    collision1_t = (p_positions[0] - c_positions[0] - c_next_thickness) / denom
-                                    collision2_t = (p_positions[0] - c_positions[0] + c_next_thickness) / denom
+            # Event-granular log: latest snapshot of all particles
+            self.logger.record_snapshots([p.current_snapshots[-1] for p in self.particles])
 
-                                    if 0 <= collision1_t <= 1 or 0 <= collision2_t <= 1:
-                                        next_penalty_candidates.append(c)
-                                        move_on = True
-                            if move_on: break
-                        if move_on: break
+            heapq.heappush(self.eventQ, (te + e.h, e))  # Schedule next force event
 
-            # Initiate rollback
-            if len(next_penalty_candidates) > 0:
-                # Rollback
-                for p in self.particles:
-                    p.current_snapshots = [p.current_snapshots[0]]  # Reset snapshots
-                self.eventQ = [(t, e) for t, e in self.eventQ_at_start]  # Restore initial event queue
+            self.past_events.append((te, e))  # Record processed event
 
-                # Engage new penalty layers
-                for c in next_penalty_candidates:
-                    penalty = PenaltyEvent(self.penalty_timestep, c, len(c.active_penalties) + 1)
-                    self.eventQ.append((get_next_time(0, penalty.h, self.start_of_window), penalty))
-                    c.active_penalties.append(penalty)
+            yield YieldType.EVENT_FINISHED, self
 
-                # Update saved starting event queue
-                self.eventQ_at_start = [(t, e) for t, e in self.eventQ]
-
-                yield YieldType.TIME_WINDOW_FINISHED_ROLLBACK, self
-
-            # Proceed to next rollback window
-            else:
-                # Move old window's snapshots into history
-                for p in self.particles:
-                    p.previous_snapshots += p.current_snapshots[:-1]
-                    p.current_snapshots = [p.current_snapshots[-1]]
-
-                # Remove penalties
-                for c in self.collideables:
-                    innermost_colliding_layer = None
-
-                    # Finds index of c's innermost layer which is exerting a force on at least one particle
-                    for i in range(len(c.active_penalties) - 1,  -1, -1):  # Loop backwards through active penalties
-                        anyone_colliding = False
-
-                        for p in self.particles:
-                            if c.active_penalties[i].get_force(p) != 0:
-                                anyone_colliding = True
-                                break
-
-                        if anyone_colliding:
-                            innermost_colliding_layer = i
-                            break
-
-                    def remove_penalties_from_eventQ(penalties):
-                        tups_to_remove = []
-                        for tup in self.eventQ:
-                            if tup[1] in penalties:
-                                tups_to_remove.append(tup)
-                        for tup in tups_to_remove:
-                            self.eventQ.remove(tup)
-                        heapq.heapify(self.eventQ)
-
-                    # No layer is exerting force, remove all
-                    if innermost_colliding_layer is None:
-                        remove_penalties_from_eventQ(c.active_penalties)
-                        c.active_penalties = []
-                    # Innermost layer i is exerting force. Keep i and all layers further out than i. Delete the rest
-                    else:
-                        remove_penalties_from_eventQ(c.active_penalties[innermost_colliding_layer+1:])
-                        c.active_penalties = c.active_penalties[:innermost_colliding_layer+1]
-
-                # Update bounds to next window and save event queue state
-                self.start_of_window = self.end_of_window
-                self.end_of_window = self.start_of_window + self.R
-                self.eventQ_at_start = [(t, e) for t, e in self.eventQ]
-
-                yield YieldType.TIME_WINDOW_FINISHED, self
+    def output_log_data(self):
+        self.logger.output_data()
 
 
 @dataclass
@@ -428,17 +440,14 @@ class PygameVisualizer:
         granularity = 0
         is_dragging_timeline = False
         do_adjust_timeline = True
+        show_timeline = True
 
         def step():
-            while True:
-                typ, _ = next(s)
-                if (typ == YieldType.TIME_WINDOW_FINISHED and granularity == 0) or \
-                        ((typ == YieldType.TIME_WINDOW_FINISHED or typ == YieldType.TIME_WINDOW_FINISHED_ROLLBACK) and granularity == 1) or \
-                        (granularity == 2):
-                    # Auto adjust timeline to latest event
-                    if do_adjust_timeline:
-                        self.timeline_renderer.set_cam_world_center(self.sim.eventQ[0][0] - (self.timeline_renderer.cam.world_length_capture // 4))
-                    break
+            typ, _ = next(s)
+            # Auto adjust timeline to latest event
+            if do_adjust_timeline:
+                self.timeline_renderer.set_cam_world_center(
+                    self.sim.eventQ[0][0] - (self.timeline_renderer.cam.world_length_capture // 4))
 
         while running:
             self.screen.fill((255, 255, 255))
@@ -456,11 +465,11 @@ class PygameVisualizer:
                     elif e.key == pygame.K_r:
                         granularity = (granularity + 1) % 3
                     elif e.key == pygame.K_o:
-                        for p in self.sim.particles:
-                            plt.plot([s.x for s in p.previous_snapshots + p.current_snapshots])
-                        plt.show()
+                        self.sim.output_log_data()
                     elif e.key == pygame.K_t:
                         do_adjust_timeline = not do_adjust_timeline
+                    elif e.key == pygame.K_h:
+                        show_timeline = not show_timeline
 
                 elif e.type == pygame.MOUSEBUTTONDOWN:
                     if e.button == pygame.BUTTON_WHEELDOWN:
@@ -499,14 +508,17 @@ class PygameVisualizer:
                 step()
 
             if show_penalties:
-                for c in self.sim.collideables:
-                    self.draw_penalties(c)
+                screen_bottom_pos = self.camera.screen_to_world_space(self.screen_size[1], self.screen_size[1])
+                thickness = self.sim.inf_penalty_event.thresh - screen_bottom_pos
+                if thickness > 0:
+                    dummy = Collidable(0, thickness, screen_bottom_pos)
+                    dummy.active_penalties.append(PenaltyEvent(0, dummy, 1))
+                    self.draw_penalties(dummy)
             for p in self.sim.particles:
                 self.draw_particle(p.current_snapshots[-1], p.obj_id)
-            for w in self.sim.walls:
-                self.draw_wall(w)
 
-            self.screen.blit(self.timeline_renderer.render(self.sim), (0, 0))
+            if show_timeline:
+                self.screen.blit(self.timeline_renderer.render(self.sim), (0, 0))
 
             padding = 3
             y = padding
@@ -515,7 +527,8 @@ class PygameVisualizer:
                 self.settings_font.render(f"(R) Granularity: {event_granularities[granularity]}", True, (0, 0, 0)),
                 self.settings_font.render(f"(P) Show Penalty Layers: {show_penalties}", True, (0, 0, 0)),
                 self.settings_font.render(f"(A) Auto Run: {auto}", True, (0, 0, 0)),
-                self.settings_font.render(f"(T) Adjust Timeline: {do_adjust_timeline}", True, (0, 0, 0))
+                self.settings_font.render(f"(T) Adjust Timeline: {do_adjust_timeline}", True, (0, 0, 0)),
+                self.settings_font.render(f"(H) Show Timeline: {show_timeline}", True, (0, 0, 0))
             ):
                 self.screen.blit(text, (self.screen_size[0] - text.get_width() - padding, y))
                 y += text.get_height() + padding
@@ -568,8 +581,9 @@ class TimelineVisualizer:
                     self.draw_tick(surf, (tick_pos, int(self.cam.world_to_screen_space(self.dims[1], t))),
                                    int(self.tick_max_width // 1.5), 3, (190, 0, 0), f"Pen:L{e.layer}:I{e.owner.obj_id}", t)
                 else:
+                    color = (0, 0, 190) if isinstance(e, GravityEvent) else (0, 100, 0)
                     self.draw_tick(surf, (tick_pos, int(self.cam.world_to_screen_space(self.dims[1], t))),
-                                   int(self.tick_max_width // 1.5), 3, (0, 0, 190), f"{type(e).__name__}", t)
+                                   int(self.tick_max_width // 1.5), 3, color, f"{type(e).__name__}", t)
 
         for i in range(int(self.cam.screen_to_world_space(self.dims[1], self.dims[1]) // window_size),
                        int(self.cam.screen_to_world_space(self.dims[1], 0) // window_size) + 1):
@@ -583,30 +597,9 @@ class TimelineVisualizer:
 
 
 if __name__ == "__main__":
-    # sim = SPACM1DSim(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005)
-    # sim = SPACM1DSim(0.03, -1, 0.01, [3, 5], [0, 1], [0], [1, 1], 1, 1, 0.01)  # Working two-particle sim, but bounces are too far
-    # sim = SPACM1DSim(0.03, -1, 0.01, [3, 5, 7], [0, 1, 2], [0, 8], [1, 1, 1], 1, 1, 0.01)  # Working three-particle two-wall sim, but bounces are too far
+    logger = TensorboardLogger(True, "InfiniteLayerDissipationDebug")
 
-    # sim = SPACM1DSim(0.03, -1, 0.001, [3, 5, 7], [0, 1, 2], [0], [1, 1, 1], 4, 0.3, 0.001)  # Working two-particle sim, bounces not far, but is slow
-    # sim = SPACM1DSim(0.03, -1, 0.001, [3, 5, 7], [0, 1, 2], [0, 8], [1, 1, 1], 10, 0.4, 0.001)  # Working three-particle two-wall sim, accurate but slow
-
-    # sim = SPACM1DSim(0.03, -1, 0.01, [10], [0], [0], [1], 1, 0.1, 0.01)  # Infinite loop
-    # sim = SPACM1DSim(0.03, -1, 0.03, [10], [0], [0], [1], 1, 0.05, 0.03)  # Infinite loop
-
-    sim = SPACM1DSim(0.03, -1, 0.01, [3], [0], [0], [1], 1, 0.5, 0.01)
+    sim = SPACM1DSim(0.03, -1, 0.01, [3], [0], [1], 1, 0, 0.017, logger)
 
     visualizer = PygameVisualizer((800, 800), sim, 1.1, 0.005)
     visualizer.run()
-
-# Goals:
-# - Render a set of collideables and particles based on their latest snapshots
-# - Camera zoom and move
-# - scale ruler for sim
-# - snapshot timestamp next to each object
-# - step through sim with keys, or run automatically
-# - set granularity to event-granular or time-window granular
-# - show active penalty layers
-# - show next penalty layers
-
-
-
