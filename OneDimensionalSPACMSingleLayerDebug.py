@@ -284,11 +284,26 @@ class SPACM1DSim:
 
         self.accel_gravity = accel_gravity
 
-        self.inf_penalty_event = InfinitePenaltyEvent(0, penalty_timestep, 1)
+        def stiffness_lth(l: int):
+            return collision_stiffness * (l ** 3)  # ACM paper section 4
+
+        def timestep_lth(l: int, fudge=1e-4):
+            return self.penalty_timestep / l / math.sqrt(l + fudge)
+
+        def thickness_lth(l: int):
+            return 10 * (l ** (-0.25))
+
+        self.inf_penalty_events = [
+            InfinitePenaltyEvent(0, penalty_timestep, stiffness_lth(1)),
+            InfinitePenaltyEvent(0 - (thickness_lth(1) - thickness_lth(2)), timestep_lth(2), stiffness_lth(2)),
+            InfinitePenaltyEvent(0 - (thickness_lth(1) - thickness_lth(3)), timestep_lth(3), stiffness_lth(3))
+        ]
+
         # Schedule first gravity event
         heapq.heappush(self.eventQ, (timestep_gravity, GravityEvent(timestep_gravity, accel_gravity)))
         # Schedule infinite penalty
-        heapq.heappush(self.eventQ, (penalty_timestep, self.inf_penalty_event))
+        for pen in self.inf_penalty_events:
+            heapq.heappush(self.eventQ, (penalty_timestep, pen))
 
         self.start_of_window = 0
         self.end_of_window = self.R
@@ -329,8 +344,10 @@ class SPACM1DSim:
                 if self.do_compute_energy:
                     Eg = p.mass * abs(self.accel_gravity) * (pc.x - self.gravity_base)  # E_gravity = mgh
                     Ek = 0.5 * p.mass * (v1_5 ** 2)  # E_kinetic = 1/2 mv^2
-                    gap = self.inf_penalty_event.get_gap(p.get_latest_position())
-                    Ep = 0 if gap > 0 else 0.5 * self.inf_penalty_event.get_stiffness() * (gap ** 2)
+                    Ep = 0
+                    for pen in self.inf_penalty_events:
+                        gap = pen.get_gap(p.get_latest_position())
+                        Ep += 0 if gap > 0 else 0.5 * pen.get_stiffness() * (gap ** 2)
                     Etotal = Eg + Ek + Ep
                     pc.energy = Etotal
 
@@ -465,6 +482,18 @@ class PygameVisualizer:
                     elif e.key == pygame.K_r:
                         granularity = (granularity + 1) % 3
                     elif e.key == pygame.K_o:
+                        for p in self.sim.particles:
+                            plt.plot([s.t for s in p.previous_snapshots + p.current_snapshots],
+                                     [s.x for s in p.previous_snapshots + p.current_snapshots])
+                        plt.xlabel("Time")
+                        plt.ylabel("Particle Height")
+                        plt.show()
+                        for p in self.sim.particles:
+                            plt.plot([s.t for s in p.previous_snapshots + p.current_snapshots],
+                                     [s.energy for s in p.previous_snapshots + p.current_snapshots])
+                        plt.xlabel("Time")
+                        plt.ylabel("Particle Energy")
+                        plt.show()
                         self.sim.output_log_data()
                     elif e.key == pygame.K_t:
                         do_adjust_timeline = not do_adjust_timeline
@@ -509,11 +538,12 @@ class PygameVisualizer:
 
             if show_penalties:
                 screen_bottom_pos = self.camera.screen_to_world_space(self.screen_size[1], self.screen_size[1])
-                thickness = self.sim.inf_penalty_event.thresh - screen_bottom_pos
-                if thickness > 0:
-                    dummy = Collidable(0, thickness, screen_bottom_pos)
-                    dummy.active_penalties.append(PenaltyEvent(0, dummy, 1))
-                    self.draw_penalties(dummy)
+                for pen in self.sim.inf_penalty_events:
+                    thickness = pen.thresh - screen_bottom_pos
+                    if thickness > 0:
+                        dummy = Collidable(0, thickness, screen_bottom_pos)
+                        dummy.active_penalties.append(PenaltyEvent(0, dummy, 1))
+                        self.draw_penalties(dummy)
             for p in self.sim.particles:
                 self.draw_particle(p.current_snapshots[-1], p.obj_id)
 
@@ -597,9 +627,9 @@ class TimelineVisualizer:
 
 
 if __name__ == "__main__":
-    logger = TensorboardLogger(True, "InfiniteLayerDissipationDebug")
+    logger = TensorboardLogger(True, "Infinite2LayerDissipationDebug")
 
-    sim = SPACM1DSim(0.03, -1, 0.01, [3], [0], [1], 1, 0, 0.017, logger)
+    sim = SPACM1DSim(0.03, -2, 0.01, [10], [0], [1], 3, 0, 0.017, logger)
 
     visualizer = PygameVisualizer((800, 800), sim, 1.1, 0.005)
     visualizer.run()

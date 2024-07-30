@@ -1,5 +1,7 @@
 from __future__ import  annotations
 
+import os
+
 import numpy as np
 import pygame
 from matplotlib import pyplot as plt
@@ -47,6 +49,9 @@ class Snapshot:
     t: float
     energy: Optional[float]
     has_velocity_changed: bool
+    kinetic_energy: Optional[float]
+    potential_energy: Optional[float]
+    penalty_energy: Optional[float]
 
 
 def get_next_time(start_time: float, dt: float, cur_time: float):
@@ -151,16 +156,14 @@ class Particle(Collidable):
     """
     current_snapshots: snapshots in the current rollback window. First snapshot in this list is the start of
     this rollback window
-    previous_snapshots: rollback windows which have passed.
     """
     def __init__(self, collision_stiffness: float, first_layer_thickness: float,
                  x: float, v: float, cur_time: float, mass: float):
         super().__init__(collision_stiffness, first_layer_thickness, x)
 
-        self.previous_snapshots: list[Snapshot] = []
         self.current_snapshots: list[Snapshot] = []
 
-        self.current_snapshots.append(Snapshot(x, v, cur_time, None, True))
+        self.current_snapshots.append(Snapshot(x, v, cur_time, None, True, None, None, None))
 
         self.mass = mass
 
@@ -201,12 +204,141 @@ class Logger:
         maintained across all calls"""
 
     @abstractmethod
+    def record_window_snapshots(self, snapshots: list[Snapshot]):
+        """Record a new list of snapshots for every particle. The particle order in the given snapshots list is
+        maintained across all calls. Unlike record_snapshots, this method is only called once at the end of a
+        successful rollback window. Useful in case you dont care about logging each rollback"""
+
+    @abstractmethod
     def output_data(self):
         """Output current data. This may be called multiple times in the same simulation"""
 
 
+class LoggerGroup(Logger):
+    def __init__(self, loggers: list[Logger]):
+        self.loggers = loggers
+
+    def rollback(self):
+        for lg in self.loggers:
+            lg.rollback()
+
+    def record_snapshots(self, snapshots: list[Snapshot]):
+        for lg in self.loggers:
+            lg.record_snapshots(snapshots)
+
+    def record_window_snapshots(self, snapshots: list[Snapshot]):
+        for lg in self.loggers:
+            lg.record_window_snapshots(snapshots)
+
+    def output_data(self):
+        for lg in self.loggers:
+            lg.output_data()
+
+
+class TextLogger(Logger):
+    def __init__(self, do_log: bool, custom_experiment_prefix: str):
+        self.particle_strings: list[str] = []
+
+        if "textlogs" not in os.listdir("."):
+            os.mkdir("./textlogs")
+
+        self.folder_name = f"textlogs/{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}"
+        self.do_log = do_log
+        self.output_number = 0
+
+    def rollback(self):
+        for ps in range(len(self.particle_strings)):
+            self.particle_strings[ps] += "ROLLBACK\n"
+
+    def record_snapshots(self, snapshots: list[Snapshot]):
+        # initialize empty content
+        if not len(self.particle_strings):
+            self.particle_strings = ["" for _ in snapshots]
+
+        for s in range(len(snapshots)):
+            self.particle_strings[s] += f"t={snapshots[s].t}  x={snapshots[s].x}  v={snapshots[s].v}  " \
+                                        f"E={snapshots[s].energy}  Ek={snapshots[s].kinetic_energy}  " \
+                                        f"Eg={snapshots[s].potential_energy}  Ep={snapshots[s].penalty_energy}\n"
+
+    def record_window_snapshots(self, snapshots: list[Snapshot]):
+        pass
+
+    def output_data(self):
+        for ps in range(len(self.particle_strings)):
+            with open(self.folder_name + f"-P{ps}-{self.output_number}.txt", "w") as file:
+                file.write(self.particle_strings[ps])
+        self.output_number += 1
+
+
+class MatplotlibLogger(Logger):
+    def __init__(self, do_log: bool, custom_experiment_prefix: str):
+        self.positions: list[list[float]] = []  # vectors of each particle's pos at corresponding self.times index
+        self.velocities: list[list[float]] = []  # vectors of each particle's vel at corresponding self.times index
+        self.energies: list[list[float]] = []  # vectors of each particle's energy at corresponding self.times index
+        self.kinetic_energies: list[list[float]] = []
+        self.potential_energies: list[list[float]] = []
+        self.penalty_energies: list[list[float]] = []
+        self.times: list[float] = []  # stores timestamps of data recording
+
+        if "matplotlibplots" not in os.listdir("."):
+            os.mkdir("./matplotlibplots")
+
+        self.folder_name = f"matplotlibplots/{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}"
+        self.do_log = do_log
+        self.output_number = 0
+
+    def rollback(self):
+        pass
+
+    def record_snapshots(self, snapshots: list[Snapshot]):
+        pass
+
+    def record_window_snapshots(self, snapshots: list[Snapshot]):
+        if not self.do_log: return
+
+        self.times.append(snapshots[0].t)
+
+        self.positions.append([s.x for s in snapshots])
+        self.velocities.append([s.v for s in snapshots])
+        self.energies.append([s.energy for s in snapshots])
+        self.kinetic_energies.append([s.kinetic_energy for s in snapshots])
+        self.potential_energies.append([s.potential_energy for s in snapshots])
+        self.penalty_energies.append([s.penalty_energy for s in snapshots])
+
+    def output_data(self):
+        if not self.do_log: return
+
+        for p in range(len(self.positions[0])):
+            plt.plot(self.times, [poses[p] for poses in self.positions])
+        plt.xlabel("Time")
+        plt.ylabel("Particle Height")
+        plt.savefig(self.folder_name + f"-position-{self.output_number}.png")
+        for p in range(len(self.positions[0])):
+            plt.plot(self.times, [energies[p] for energies in self.energies])
+        plt.xlabel("Time")
+        plt.ylabel("Particle Energy")
+        plt.savefig(self.folder_name + f"-energy-{self.output_number}.png")
+        for p in range(len(self.positions[0])):
+            plt.plot(self.times, [energies[p] for energies in self.kinetic_energies])
+        plt.xlabel("Time")
+        plt.ylabel("Particle Kinetic Energy")
+        plt.savefig(self.folder_name + f"-kineticenergy-{self.output_number}.png")
+        for p in range(len(self.positions[0])):
+            plt.plot(self.times, [energies[p] for energies in self.potential_energies])
+        plt.xlabel("Time")
+        plt.ylabel("Particle Potential Energy")
+        plt.savefig(self.folder_name + f"-potentialenergy-{self.output_number}.png")
+        for p in range(len(self.positions[0])):
+            plt.plot(self.times, [energies[p] for energies in self.penalty_energies])
+        plt.xlabel("Time")
+        plt.ylabel("Particle Penalty Energy")
+        plt.savefig(self.folder_name + f"-penaltyenergy-{self.output_number}.png")
+
+        self.output_number += 1
+
+
 class TensorboardLogger(Logger):
-    def __init__(self, do_log=True, custom_experiment_prefix=""):
+    def __init__(self, do_log=True, custom_experiment_prefix="", only_window=True):
         self.do_log = do_log
         self.cur_rollback = 0
         self.num_particles = -1
@@ -218,49 +350,81 @@ class TensorboardLogger(Logger):
         self.positions: list[list[float]] = []  # vectors of each particle's pos at corresponding self.times index
         self.velocities: list[list[float]] = []  # vectors of each particle's vel at corresponding self.times index
         self.energies: list[list[float]] = []  # vectors of each particle's energy at corresponding self.times index
+        self.kinetic_energies: list[list[float]] = []
+        self.potential_energies: list[list[float]] = []
+        self.penalty_energies: list[list[float]] = []
         self.rollback_numbers: list[int] = []  # stores each datapoints corresponding rollback number
         self.times: list[float] = []  # stores timestamps of data recording
+
+        self.only_window = only_window  # When true only records snapshots at the end of each window, ignores rollback
 
     def rollback(self):
         if not self.do_log: return
 
         self.cur_rollback += 1
 
-    def record_snapshots(self, snapshots: list[Snapshot]):
-        if not self.do_log: return
-
+    def __record_snapshots(self, snapshots: list[Snapshot]):
         # Every snapshot should have the same, so taking it at [0] is arbitrary
         self.times.append(snapshots[0].t)
 
         self.positions.append([s.x for s in snapshots])
         self.velocities.append([s.v for s in snapshots])
         self.energies.append([s.energy for s in snapshots])
+        self.kinetic_energies.append([s.kinetic_energy for s in snapshots])
+        self.potential_energies.append([s.potential_energy for s in snapshots])
+        self.penalty_energies.append([s.penalty_energy for s in snapshots])
 
         self.rollback_numbers.append(self.cur_rollback)
 
         if self.num_particles == -1: self.num_particles = len(snapshots)
+
+    def record_snapshots(self, snapshots: list[Snapshot]):
+        if (not self.do_log) or self.only_window: return
+        self.__record_snapshots(snapshots)
+
+    def record_window_snapshots(self, snapshots: list[Snapshot]):
+        if (not self.do_log) or (not self.only_window): return
+        self.__record_snapshots(snapshots)
 
     def output_data(self):
         if not self.do_log: return
 
         writer = SummaryWriter(self.folder_name + f"-{self.output_number}")
 
-        # All the lists should be the same length so choosing self.positions is arbitrary
-        for i in range(len(self.positions)):
-            for p in range(len(self.positions[i])):
-                writer.add_scalar(f"PosP{p}/{self.rollback_numbers[i]}", self.positions[i][p], int(self.times[i] * 100000))
-                writer.add_scalar(f"VelP{p}/{self.rollback_numbers[i]}", self.velocities[i][p], int(self.times[i] * 100000))
-                writer.add_scalar(f"EnergyP{p}/{self.rollback_numbers[i]}", self.energies[i][p], int(self.times[i] * 100000))
+        if self.only_window:
+            # All the lists should be the same length so choosing self.positions is arbitrary
+            for i in range(len(self.positions)):
+                for p in range(len(self.positions[i])):
+                    writer.add_scalar(f"PosP{p}", self.positions[i][p], int(self.times[i] * 100000))
+                    writer.add_scalar(f"VelP{p}", self.velocities[i][p], int(self.times[i] * 100000))
+                    writer.add_scalar(f"EnergyP{p}", self.energies[i][p], int(self.times[i] * 100000))
+                    writer.add_scalar(f"KineticEnergyP{p}", self.kinetic_energies[i][p], int(self.times[i] * 100000))
+                    writer.add_scalar(f"PotentialEnergyP{p}", self.potential_energies[i][p], int(self.times[i] * 100000))
+                    writer.add_scalar(f"PenaltyEnergyP{p}", self.penalty_energies[i][p], int(self.times[i] * 100000))
 
-        layout = {
-            f"SimulationP{p}": {
-                f"PosP{p}": ["Multiline", [f"PosP{p}/{i}" for i in range(self.cur_rollback + 1)]],
-                f"VelP{p}": ["Multiline", [f"VelP{p}/{i}" for i in range(self.cur_rollback + 1)]],
-                f"EnergyP{p}": ["Multiline", [f"EnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]]
-            } for p in range(self.num_particles)
-        }
+        else:
+            # All the lists should be the same length so choosing self.positions is arbitrary
+            for i in range(len(self.positions)):
+                for p in range(len(self.positions[i])):
+                    writer.add_scalar(f"PosP{p}/{self.rollback_numbers[i]}", self.positions[i][p], int(self.times[i] * 100000))
+                    writer.add_scalar(f"VelP{p}/{self.rollback_numbers[i]}", self.velocities[i][p], int(self.times[i] * 100000))
+                    writer.add_scalar(f"EnergyP{p}/{self.rollback_numbers[i]}", self.energies[i][p], int(self.times[i] * 100000))
+                    writer.add_scalar(f"KineticEnergyP{p}/{self.rollback_numbers[i]}", self.kinetic_energies[i][p], int(self.times[i] * 100000))
+                    writer.add_scalar(f"PotentialEnergyP{p}/{self.rollback_numbers[i]}", self.potential_energies[i][p], int(self.times[i] * 100000))
+                    writer.add_scalar(f"PenaltyEnergyP{p}/{self.rollback_numbers[i]}", self.penalty_energies[i][p], int(self.times[i] * 100000))
 
-        writer.add_custom_scalars(layout)
+            layout = {
+                f"SimulationP{p}": {
+                    f"PosP{p}": ["Multiline", [f"PosP{p}/{i}" for i in range(self.cur_rollback + 1)]],
+                    f"VelP{p}": ["Multiline", [f"VelP{p}/{i}" for i in range(self.cur_rollback + 1)]],
+                    f"EnergyP{p}": ["Multiline", [f"EnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]],
+                    f"KineticEnergyP{p}": ["Multiline", [f"KineticEnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]],
+                    f"PotentialEnergyP{p}": ["Multiline", [f"PotentialEnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]],
+                    f"PenaltyEnergyP{p}": ["Multiline", [f"PenaltyEnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]]
+                } for p in range(self.num_particles)
+            }
+
+            writer.add_custom_scalars(layout)
         writer.close()
 
         self.output_number += 1
@@ -314,7 +478,7 @@ class SPACM1DSim:
                     x1 = p0.x + ((te - p0.t) * p0.v)  # integrate position up to this event
                     t1 = te  # update to new time
 
-                    p.current_snapshots.append(Snapshot(x1, -1, t1, None, False))  # Add new snapshot with placeholder v and has_velocity_changed
+                    p.current_snapshots.append(Snapshot(x1, -1, t1, None, False, None, None, None))  # Add new snapshot with placeholder v and has_velocity_changed
 
                 for p in self.particles:
                     p0 = p.current_snapshots[-2]
@@ -340,6 +504,9 @@ class SPACM1DSim:
                                         Ep += 0.5 * c.get_lth_stiffness(pen.layer) * (gap ** 2)
                         Etotal = Eg + Ek + Ep
                         pc.energy = Etotal
+                        pc.kinetic_energy = Ek
+                        pc.potential_energy = Eg
+                        pc.penalty_energy = Ep
 
                 # Event-granular log: latest snapshot of all particles
                 self.logger.record_snapshots([p.current_snapshots[-1] for p in self.particles])
@@ -356,7 +523,8 @@ class SPACM1DSim:
                 if p0.t < self.end_of_window:
                     x1 = p0.x + ((self.end_of_window - p0.t) * p0.v)
                     t1 = self.end_of_window
-                    p.current_snapshots.append(Snapshot(x1, p0.v, t1, None, False))
+                    p.current_snapshots.append(Snapshot(x1, p0.v, t1, p0.energy, False,
+                                                        p0.kinetic_energy, p0.potential_energy, p0.penalty_energy))
 
             # Checks missed collisions
             next_penalty_candidates: list[Collidable] = []  # Objects whose next penalty layer needs activating
@@ -425,9 +593,10 @@ class SPACM1DSim:
 
             # Proceed to next rollback window
             else:
-                # Move old window's snapshots into history
+                # window-granular log for particles
+                self.logger.record_window_snapshots([p.current_snapshots[-1] for p in self.particles])
+
                 for p in self.particles:
-                    p.previous_snapshots += p.current_snapshots[:-1]
                     p.current_snapshots = [p.current_snapshots[-1]]
 
                 # Remove penalties
@@ -598,20 +767,7 @@ class PygameVisualizer:
                     elif e.key == pygame.K_r:
                         granularity = (granularity + 1) % 3
                     elif e.key == pygame.K_o:
-                        # for p in self.sim.particles:
-                        #     plt.plot([s.t for s in p.previous_snapshots + p.current_snapshots],
-                        #              [s.x for s in p.previous_snapshots + p.current_snapshots])
-                        # plt.xlabel("Time")
-                        # plt.ylabel("Particle Height")
-                        # plt.show()
-                        # for p in self.sim.particles:
-                        #     plt.plot([s.t for s in p.previous_snapshots + p.current_snapshots],
-                        #              [s.energy for s in p.previous_snapshots + p.current_snapshots])
-                        # plt.xlabel("Time")
-                        # plt.ylabel("Particle Energy")
-                        # plt.show()
                         self.sim.output_log_data()
-                        # TODO: Remove past_snapshot log in particles
                     elif e.key == pygame.K_t:
                         do_adjust_timeline = not do_adjust_timeline
                     elif e.key == pygame.K_h:
@@ -740,16 +896,19 @@ class TimelineVisualizer:
 
 
 if __name__ == "__main__":
-    # for i in range(10):
-    #     writer.add_scalar("plot1", math.log((i+1) * 50), i)
-    # for i in range(5, 10):
-    #     writer.add_scalar("plot1", math.log((i + 1) * 70), i)
+    # Logging setup
+    prefix = "LoggingTestWithTextAndMatplotlib" #"SingleBallWithRollbackDissipationTest"
+    do_log = True
+    only_window = True  # Prevents rollback display in TensorboardLogger when False
+    logger = LoggerGroup([
+        TensorboardLogger(do_log, prefix, only_window),
+        TextLogger(do_log, prefix),
+        MatplotlibLogger(do_log, prefix)
+    ])
 
-    logger = TensorboardLogger(True, "LoggingTest")
-
-    #sim = SPACM1DSim(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, logger)
+    sim = SPACM1DSim(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, logger)
     # sim = SPACM1DSim(0.03, -1, 0.01, [3, 5], [0, 1], [0], [1, 1], 1, 1, 0.01, logger)  # Working two-particle sim, but bounces are too far
-    sim = SPACM1DSim(0.03, -1, 0.01, [3, 5, 7], [0, 1, 2], [0, 8], [1, 1, 1], 1, 1, 0.01, logger)  # Working three-particle two-wall sim, but bounces are too far
+    #sim = SPACM1DSim(0.03, -1, 0.01, [3, 5, 7], [0, 1, 2], [0, 8], [1, 1, 1], 1, 1, 0.01, logger)  # Working three-particle two-wall sim, but bounces are too far
 
     # sim = SPACM1DSim(0.03, -1, 0.001, [3, 5, 7], [0, 1, 2], [0], [1, 1, 1], 4, 0.3, 0.001)  # Working two-particle sim, bounces not far, but is slow
     # sim = SPACM1DSim(0.03, -1, 0.001, [3, 5, 7], [0, 1, 2], [0, 8], [1, 1, 1], 10, 0.4, 0.001)  # Working three-particle two-wall sim, accurate but slow
@@ -766,16 +925,3 @@ if __name__ == "__main__":
 
     visualizer = PygameVisualizer((800, 800), sim, 1.1, 0.005)
     visualizer.run()
-
-# Goals:
-# - Render a set of collideables and particles based on their latest snapshots
-# - Camera zoom and move
-# - scale ruler for sim
-# - snapshot timestamp next to each object
-# - step through sim with keys, or run automatically
-# - set granularity to event-granular or time-window granular
-# - show active penalty layers
-# - show next penalty layers
-
-
-
