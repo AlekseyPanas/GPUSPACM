@@ -240,9 +240,7 @@ class NumpyLogger(Logger):
         ]]))
 
     def output_data(self):
-        if not self.do_log: return
-        open(self.filepath, "w").close()
-        np.save(self.filepath, self.dat)
+        pass
 
     def quit(self):
         self.handle.close()
@@ -716,7 +714,7 @@ class TimelineVisualizer:
 
 if __name__ == "__main__":
     # Logging setup
-    prefix = "LoggingTestNumpy" #"SingleBallWithRollbackDissipationTest"
+    prefix = "SingleBallWithRollbackDissipationTest"
     do_log = True
     logger = NumpyLogger(do_log, prefix)
 
