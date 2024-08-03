@@ -190,16 +190,22 @@ class TensorboardLogger(Converter):
         super().__init__(reader, foldername)
         self.only_window = only_window  # When true only records snapshots at the end of each window, ignores rollback
 
-    def number_of_suffixes(self) -> int: return 2
+    def number_of_suffixes(self) -> int: return 1
 
     def parse_last_part(self, suffix: str) -> int: return int(suffix)
 
     def convert(self):
-        writer = SummaryWriter(self.folder_name + f"-{self.output_number}")
-
-        # TODO: Fix this method, currently pasted from old code
+        writer = SummaryWriter(os.path.join(self.folder_name, self.reader.get_file_name() + f"-{self.output_number}"))
 
         if self.only_window:
+            self.positions = [[snap.x for snap in snaps] for snaps in self.reader.window_granular()]
+            self.velocities = [[snap.v for snap in snaps] for snaps in self.reader.window_granular()]
+            self.energies = [[snap.energy for snap in snaps] for snaps in self.reader.window_granular()]
+            self.kinetic_energies = [[snap.kinetic_energy for snap in snaps] for snaps in self.reader.window_granular()]
+            self.potential_energies = [[snap.potential_energy for snap in snaps] for snaps in self.reader.window_granular()]
+            self.penalty_energies = [[snap.penalty_energy for snap in snaps] for snaps in self.reader.window_granular()]
+            self.times = [snaps[0].t for snaps in self.reader.window_granular()]
+
             # All the lists should be the same length so choosing self.positions is arbitrary
             for i in range(len(self.positions)):
                 for p in range(len(self.positions[i])):
@@ -211,6 +217,22 @@ class TensorboardLogger(Converter):
                     writer.add_scalar(f"PenaltyEnergyP{p}", self.penalty_energies[i][p], int(self.times[i] * 100000))
 
         else:
+            self.positions = [[snap.x for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
+            self.velocities = [[snap.v for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
+            self.energies = [[snap.energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
+            self.kinetic_energies = [[snap.kinetic_energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
+            self.potential_energies = [[snap.potential_energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
+            self.penalty_energies = [[snap.penalty_energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
+            self.times = [snaps[0].t for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
+            self.rollback_numbers = []
+            self.cur_rollback = 0
+            for snaps in self.reader.event_granular():
+                if snaps[0].snap_type == SnapshotType.ROLLBACK:
+                    self.cur_rollback += 1
+                else:
+                    self.rollback_numbers.append(self.cur_rollback)
+            assert len(self.rollback_numbers) == len(self.times)
+
             # All the lists should be the same length so choosing self.positions is arbitrary
             for i in range(len(self.positions)):
                 for p in range(len(self.positions[i])):
@@ -229,7 +251,7 @@ class TensorboardLogger(Converter):
                     f"KineticEnergyP{p}": ["Multiline", [f"KineticEnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]],
                     f"PotentialEnergyP{p}": ["Multiline", [f"PotentialEnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]],
                     f"PenaltyEnergyP{p}": ["Multiline", [f"PenaltyEnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]]
-                } for p in range(self.num_particles)
+                } for p in range(self.reader.get_num_particles())
             }
 
             writer.add_custom_scalars(layout)
@@ -270,8 +292,8 @@ if __name__ == "__main__":
     elif opt_idx == 1:
         MatplotlibConverter(reader, "matplotlibplots").convert()
     elif opt_idx == 2:
-        pass
+        TensorboardLogger(reader, "runs", False).convert()
     elif opt_idx == 3:
-        pass
+        TensorboardLogger(reader, "runs", True).convert()
     else:
         print("Sus.... this codepath should be impossible")
