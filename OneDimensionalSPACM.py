@@ -1,12 +1,11 @@
 from __future__ import  annotations
 
 import os
-
+from npy_append_array import NpyAppendArray
 import numpy as np
 import pygame
 from matplotlib import pyplot as plt
 import math
-import numpy
 from dataclasses import dataclass
 from typing import Optional
 import heapq
@@ -18,28 +17,6 @@ import colorsys
 from tensorboardX import SummaryWriter
 from datetime import datetime
 pygame.init()
-
-
-"""
-Steps:
-- Start sim with params
-- Schedule first gravity force event
-- Record first time window data
-- While events in queue within this time interval R:
-    - Pop event
-    - Integrate position and update vertex ti, xi
-    - Integrate force
-    - Schedule next force event if applicable
-- Advance to end of time window if space left
-- Check missed collisions within time window
-- If missed
-    - Rollback
-    - For each missed collision where object A entered B's next inactive penalty layer
-        - Enable B's next penalty layer by scheduling the first force event affecting all objects
-- Else
-    - Remove any penalty layers exerting 0 force at the end of the time window (detect this by 
-    plugging in the position values at the end of the time window into the penalty force equation and seeing if its 0)
-"""
 
 
 @dataclass(unsafe_hash=True)
@@ -213,221 +190,62 @@ class Logger:
     def output_data(self):
         """Output current data. This may be called multiple times in the same simulation"""
 
-
-class LoggerGroup(Logger):
-    def __init__(self, loggers: list[Logger]):
-        self.loggers = loggers
-
-    def rollback(self):
-        for lg in self.loggers:
-            lg.rollback()
-
-    def record_snapshots(self, snapshots: list[Snapshot]):
-        for lg in self.loggers:
-            lg.record_snapshots(snapshots)
-
-    def record_window_snapshots(self, snapshots: list[Snapshot]):
-        for lg in self.loggers:
-            lg.record_window_snapshots(snapshots)
-
-    def output_data(self):
-        for lg in self.loggers:
-            lg.output_data()
+    @abstractmethod
+    def quit(self):
+        """Called when the simulation quits. Use this to clean up anything"""
 
 
-class TextLogger(Logger):
+class NumpyLogger(Logger):
     def __init__(self, do_log: bool, custom_experiment_prefix: str):
-        self.particle_strings: list[str] = []
-
-        if "textlogs" not in os.listdir("."):
-            os.mkdir("./textlogs")
-
-        self.folder_name = f"textlogs/{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}"
-        self.do_log = do_log
-        self.output_number = 0
-
-    def rollback(self):
-        for ps in range(len(self.particle_strings)):
-            self.particle_strings[ps] += "ROLLBACK\n"
-
-    def record_snapshots(self, snapshots: list[Snapshot]):
-        # initialize empty content
-        if not len(self.particle_strings):
-            self.particle_strings = ["" for _ in snapshots]
-
-        for s in range(len(snapshots)):
-            self.particle_strings[s] += f"t={snapshots[s].t}  x={snapshots[s].x}  v={snapshots[s].v}  " \
-                                        f"E={snapshots[s].energy}  Ek={snapshots[s].kinetic_energy}  " \
-                                        f"Eg={snapshots[s].potential_energy}  Ep={snapshots[s].penalty_energy}\n"
-
-    def record_window_snapshots(self, snapshots: list[Snapshot]):
-        pass
-
-    def output_data(self):
-        for ps in range(len(self.particle_strings)):
-            with open(self.folder_name + f"-P{ps}-{self.output_number}.txt", "w") as file:
-                file.write(self.particle_strings[ps])
-        self.output_number += 1
-
-
-class MatplotlibLogger(Logger):
-    def __init__(self, do_log: bool, custom_experiment_prefix: str):
-        self.positions: list[list[float]] = []  # vectors of each particle's pos at corresponding self.times index
-        self.velocities: list[list[float]] = []  # vectors of each particle's vel at corresponding self.times index
-        self.energies: list[list[float]] = []  # vectors of each particle's energy at corresponding self.times index
-        self.kinetic_energies: list[list[float]] = []
-        self.potential_energies: list[list[float]] = []
-        self.penalty_energies: list[list[float]] = []
-        self.times: list[float] = []  # stores timestamps of data recording
-
-        if "matplotlibplots" not in os.listdir("."):
-            os.mkdir("./matplotlibplots")
-
-        self.folder_name = f"matplotlibplots/{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}"
-        self.do_log = do_log
-        self.output_number = 0
-
-    def rollback(self):
-        pass
-
-    def record_snapshots(self, snapshots: list[Snapshot]):
-        pass
-
-    def record_window_snapshots(self, snapshots: list[Snapshot]):
-        if not self.do_log: return
-
-        self.times.append(snapshots[0].t)
-
-        self.positions.append([s.x for s in snapshots])
-        self.velocities.append([s.v for s in snapshots])
-        self.energies.append([s.energy for s in snapshots])
-        self.kinetic_energies.append([s.kinetic_energy for s in snapshots])
-        self.potential_energies.append([s.potential_energy for s in snapshots])
-        self.penalty_energies.append([s.penalty_energy for s in snapshots])
-
-    def output_data(self):
-        if not self.do_log: return
-
-        for p in range(len(self.positions[0])):
-            plt.plot(self.times, [poses[p] for poses in self.positions])
-        plt.xlabel("Time")
-        plt.ylabel("Particle Height")
-        plt.savefig(self.folder_name + f"-position-{self.output_number}.png")
-        for p in range(len(self.positions[0])):
-            plt.plot(self.times, [energies[p] for energies in self.energies])
-        plt.xlabel("Time")
-        plt.ylabel("Particle Energy")
-        plt.savefig(self.folder_name + f"-energy-{self.output_number}.png")
-        for p in range(len(self.positions[0])):
-            plt.plot(self.times, [energies[p] for energies in self.kinetic_energies])
-        plt.xlabel("Time")
-        plt.ylabel("Particle Kinetic Energy")
-        plt.savefig(self.folder_name + f"-kineticenergy-{self.output_number}.png")
-        for p in range(len(self.positions[0])):
-            plt.plot(self.times, [energies[p] for energies in self.potential_energies])
-        plt.xlabel("Time")
-        plt.ylabel("Particle Potential Energy")
-        plt.savefig(self.folder_name + f"-potentialenergy-{self.output_number}.png")
-        for p in range(len(self.positions[0])):
-            plt.plot(self.times, [energies[p] for energies in self.penalty_energies])
-        plt.xlabel("Time")
-        plt.ylabel("Particle Penalty Energy")
-        plt.savefig(self.folder_name + f"-penaltyenergy-{self.output_number}.png")
-
-        self.output_number += 1
-
-
-class TensorboardLogger(Logger):
-    def __init__(self, do_log=True, custom_experiment_prefix="", only_window=True):
-        self.do_log = do_log
-        self.cur_rollback = 0
+        self.dat: np.ndarray | None = None
         self.num_particles = -1
 
-        self.folder_name = f"runs/{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}"
+        self.folder_name = "npdat"
+        if self.folder_name not in os.listdir("."):
+            os.mkdir(f"./{self.folder_name}")
 
-        self.output_number = 0  # For multiple outputs in the same simulation, differentiates ID
+        self.filepath = f"{self.folder_name}/{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}.npy"
+        self.do_log = do_log
+        self.did_init = False
 
-        self.positions: list[list[float]] = []  # vectors of each particle's pos at corresponding self.times index
-        self.velocities: list[list[float]] = []  # vectors of each particle's vel at corresponding self.times index
-        self.energies: list[list[float]] = []  # vectors of each particle's energy at corresponding self.times index
-        self.kinetic_energies: list[list[float]] = []
-        self.potential_energies: list[list[float]] = []
-        self.penalty_energies: list[list[float]] = []
-        self.rollback_numbers: list[int] = []  # stores each datapoints corresponding rollback number
-        self.times: list[float] = []  # stores timestamps of data recording
+        self.handle = None
+        if self.do_log:
+            self.handle = NpyAppendArray(self.filepath, delete_if_exists=True)
 
-        self.only_window = only_window  # When true only records snapshots at the end of each window, ignores rollback
+    def __init_array(self, num_particles):
+        self.dat = np.ndarray([0, num_particles, 8])
+        self.num_particles = num_particles
 
     def rollback(self):
         if not self.do_log: return
 
-        self.cur_rollback += 1
-
-    def __record_snapshots(self, snapshots: list[Snapshot]):
-        # Every snapshot should have the same, so taking it at [0] is arbitrary
-        self.times.append(snapshots[0].t)
-
-        self.positions.append([s.x for s in snapshots])
-        self.velocities.append([s.v for s in snapshots])
-        self.energies.append([s.energy for s in snapshots])
-        self.kinetic_energies.append([s.kinetic_energy for s in snapshots])
-        self.potential_energies.append([s.potential_energy for s in snapshots])
-        self.penalty_energies.append([s.penalty_energy for s in snapshots])
-
-        self.rollback_numbers.append(self.cur_rollback)
-
-        if self.num_particles == -1: self.num_particles = len(snapshots)
+        self.handle.append(np.array([[[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 2.0] for _ in range(self.num_particles)]]))
 
     def record_snapshots(self, snapshots: list[Snapshot]):
-        if (not self.do_log) or self.only_window: return
-        self.__record_snapshots(snapshots)
+        if not self.do_log: return
+        if not self.did_init:
+            self.did_init = True
+            self.__init_array(len(snapshots))
+
+        self.handle.append(np.array([[
+            [snap.x, snap.v, snap.t, snap.energy, snap.kinetic_energy,
+             snap.potential_energy, snap.penalty_energy, 0.0] for snap in snapshots
+        ]]))
 
     def record_window_snapshots(self, snapshots: list[Snapshot]):
-        if (not self.do_log) or (not self.only_window): return
-        self.__record_snapshots(snapshots)
+        if not self.do_log: return
+        self.handle.append(np.array([[
+            [snap.x, snap.v, snap.t, snap.energy, snap.kinetic_energy,
+             snap.potential_energy, snap.penalty_energy, 1.0] for snap in snapshots
+        ]]))
 
     def output_data(self):
         if not self.do_log: return
+        open(self.filepath, "w").close()
+        np.save(self.filepath, self.dat)
 
-        writer = SummaryWriter(self.folder_name + f"-{self.output_number}")
-
-        if self.only_window:
-            # All the lists should be the same length so choosing self.positions is arbitrary
-            for i in range(len(self.positions)):
-                for p in range(len(self.positions[i])):
-                    writer.add_scalar(f"PosP{p}", self.positions[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"VelP{p}", self.velocities[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"EnergyP{p}", self.energies[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"KineticEnergyP{p}", self.kinetic_energies[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"PotentialEnergyP{p}", self.potential_energies[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"PenaltyEnergyP{p}", self.penalty_energies[i][p], int(self.times[i] * 100000))
-
-        else:
-            # All the lists should be the same length so choosing self.positions is arbitrary
-            for i in range(len(self.positions)):
-                for p in range(len(self.positions[i])):
-                    writer.add_scalar(f"PosP{p}/{self.rollback_numbers[i]}", self.positions[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"VelP{p}/{self.rollback_numbers[i]}", self.velocities[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"EnergyP{p}/{self.rollback_numbers[i]}", self.energies[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"KineticEnergyP{p}/{self.rollback_numbers[i]}", self.kinetic_energies[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"PotentialEnergyP{p}/{self.rollback_numbers[i]}", self.potential_energies[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"PenaltyEnergyP{p}/{self.rollback_numbers[i]}", self.penalty_energies[i][p], int(self.times[i] * 100000))
-
-            layout = {
-                f"SimulationP{p}": {
-                    f"PosP{p}": ["Multiline", [f"PosP{p}/{i}" for i in range(self.cur_rollback + 1)]],
-                    f"VelP{p}": ["Multiline", [f"VelP{p}/{i}" for i in range(self.cur_rollback + 1)]],
-                    f"EnergyP{p}": ["Multiline", [f"EnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]],
-                    f"KineticEnergyP{p}": ["Multiline", [f"KineticEnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]],
-                    f"PotentialEnergyP{p}": ["Multiline", [f"PotentialEnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]],
-                    f"PenaltyEnergyP{p}": ["Multiline", [f"PenaltyEnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]]
-                } for p in range(self.num_particles)
-            }
-
-            writer.add_custom_scalars(layout)
-        writer.close()
-
-        self.output_number += 1
+    def quit(self):
+        self.handle.close()
 
 
 class SPACM1DSim:
@@ -526,6 +344,9 @@ class SPACM1DSim:
                     p.current_snapshots.append(Snapshot(x1, p0.v, t1, p0.energy, False,
                                                         p0.kinetic_energy, p0.potential_energy, p0.penalty_energy))
 
+            # window-granular log for particles
+            self.logger.record_window_snapshots([p.current_snapshots[-1] for p in self.particles])
+
             # Checks missed collisions
             next_penalty_candidates: list[Collidable] = []  # Objects whose next penalty layer needs activating
             for c in self.collideables:  # Checking c's penalty layers
@@ -593,9 +414,6 @@ class SPACM1DSim:
 
             # Proceed to next rollback window
             else:
-                # window-granular log for particles
-                self.logger.record_window_snapshots([p.current_snapshots[-1] for p in self.particles])
-
                 for p in self.particles:
                     p.current_snapshots = [p.current_snapshots[-1]]
 
@@ -758,6 +576,7 @@ class PygameVisualizer:
                 if e.type == pygame.KEYDOWN:
                     if e.key == pygame.K_q:
                         running = False
+                        self.sim.logger.quit()
                     elif e.key == pygame.K_RIGHT and not auto:
                         step()
                     elif e.key == pygame.K_a:
@@ -897,14 +716,9 @@ class TimelineVisualizer:
 
 if __name__ == "__main__":
     # Logging setup
-    prefix = "LoggingTestWithTextAndMatplotlib" #"SingleBallWithRollbackDissipationTest"
+    prefix = "LoggingTestNumpy" #"SingleBallWithRollbackDissipationTest"
     do_log = True
-    only_window = True  # Prevents rollback display in TensorboardLogger when False
-    logger = LoggerGroup([
-        TensorboardLogger(do_log, prefix, only_window),
-        TextLogger(do_log, prefix),
-        MatplotlibLogger(do_log, prefix)
-    ])
+    logger = NumpyLogger(do_log, prefix)
 
     sim = SPACM1DSim(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, logger)
     # sim = SPACM1DSim(0.03, -1, 0.01, [3, 5], [0, 1], [0], [1, 1], 1, 1, 0.01, logger)  # Working two-particle sim, but bounces are too far
