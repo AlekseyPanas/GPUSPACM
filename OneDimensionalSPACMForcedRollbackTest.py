@@ -369,61 +369,61 @@ class SPACM1DSim:
             self.logger.record_window_snapshots([p.current_snapshots[-1] for p in self.particles])
 
             # Checks missed collisions
-            next_penalty_candidates: list[Collidable] = []  # Objects whose next penalty layer needs activating
-            for c in self.collideables:  # Checking c's penalty layers
-                move_on = False  # Used as a "break" flag to exit loops once c has been added to the list
-                for p in self.particles:  # Moving particles which may have entered a new penalty layer for c
-                    if p is not c:  # Don't detect against self, duh
-
-                        # All snapshots where p or c had a velocity change (guaranteed to also include the first and snapshot
-                        # of this rollback window)
-                        velocity_changed_timestamps = sorted(
-                                c.get_velocity_changed_timestamps(self.start_of_window,
-                                                                  self.end_of_window).union(
-                                p.get_velocity_changed_timestamps(self.start_of_window, self.end_of_window)))
-
-                        # Loop through intervals between above snapshots
-                        for i in range(len(velocity_changed_timestamps) - 1):
-                            # Get thickness of c's next inactive penalty layer
-                            c_next_thickness = c.get_lth_thickness(len(c.active_penalties) + 1)
-
-                            # interval time bounds
-                            t0 = velocity_changed_timestamps[i]
-                            t1 = velocity_changed_timestamps[i+1]
-
-                            c_positions = [c.get_pos_at_time(t0), c.get_pos_at_time(t1)]
-                            p_positions = [p.get_pos_at_time(t0), p.get_pos_at_time(t1)]
-
-                            # Check if particle is already within the penalty layer at start of this interval
-                            if c_positions[0] - c_next_thickness <= p_positions[0] <= c_positions[0] + c_next_thickness:
-                                next_penalty_candidates.append(c)
-
-                            # Check if there's a t0 <= t <= t1 for which the particle enters the penalty layer
-                            else:
-                                # Solving two linear equations
-                                denom = (c_positions[1] - c_positions[0]) - (p_positions[1] - p_positions[0])
-                                if denom != 0:
-                                    collision1_t = (p_positions[0] - c_positions[0] - c_next_thickness) / denom
-                                    collision2_t = (p_positions[0] - c_positions[0] + c_next_thickness) / denom
-
-                                    if 0 <= collision1_t <= 1 or 0 <= collision2_t <= 1:
-                                        next_penalty_candidates.append(c)
-                                        move_on = True
-                            if move_on: break
-                        if move_on: break
+            # next_penalty_candidates: list[Collidable] = []  # Objects whose next penalty layer needs activating
+            # for c in self.collideables:  # Checking c's penalty layers
+            #     move_on = False  # Used as a "break" flag to exit loops once c has been added to the list
+            #     for p in self.particles:  # Moving particles which may have entered a new penalty layer for c
+            #         if p is not c:  # Don't detect against self, duh
+            #
+            #             # All snapshots where p or c had a velocity change (guaranteed to also include the first and snapshot
+            #             # of this rollback window)
+            #             velocity_changed_timestamps = sorted(
+            #                     c.get_velocity_changed_timestamps(self.start_of_window,
+            #                                                       self.end_of_window).union(
+            #                     p.get_velocity_changed_timestamps(self.start_of_window, self.end_of_window)))
+            #
+            #             # Loop through intervals between above snapshots
+            #             for i in range(len(velocity_changed_timestamps) - 1):
+            #                 # Get thickness of c's next inactive penalty layer
+            #                 c_next_thickness = c.get_lth_thickness(len(c.active_penalties) + 1)
+            #
+            #                 # interval time bounds
+            #                 t0 = velocity_changed_timestamps[i]
+            #                 t1 = velocity_changed_timestamps[i+1]
+            #
+            #                 c_positions = [c.get_pos_at_time(t0), c.get_pos_at_time(t1)]
+            #                 p_positions = [p.get_pos_at_time(t0), p.get_pos_at_time(t1)]
+            #
+            #                 # Check if particle is already within the penalty layer at start of this interval
+            #                 if c_positions[0] - c_next_thickness <= p_positions[0] <= c_positions[0] + c_next_thickness:
+            #                     next_penalty_candidates.append(c)
+            #
+            #                 # Check if there's a t0 <= t <= t1 for which the particle enters the penalty layer
+            #                 else:
+            #                     # Solving two linear equations
+            #                     denom = (c_positions[1] - c_positions[0]) - (p_positions[1] - p_positions[0])
+            #                     if denom != 0:
+            #                         collision1_t = (p_positions[0] - c_positions[0] - c_next_thickness) / denom
+            #                         collision2_t = (p_positions[0] - c_positions[0] + c_next_thickness) / denom
+            #
+            #                         if 0 <= collision1_t <= 1 or 0 <= collision2_t <= 1:
+            #                             next_penalty_candidates.append(c)
+            #                             move_on = True
+            #                 if move_on: break
+            #             if move_on: break
 
             # Initiate rollback
-            if len(next_penalty_candidates) > 0:
+            if True:
                 # Rollback
                 for p in self.particles:
                     p.current_snapshots = [p.current_snapshots[0]]  # Reset snapshots
                 self.eventQ = [(t, e) for t, e in self.eventQ_at_start]  # Restore initial event queue
 
                 # Engage new penalty layers
-                for c in next_penalty_candidates:
-                    penalty = PenaltyEvent(self.penalty_timestep, c, len(c.active_penalties) + 1)
-                    self.eventQ.append((get_next_time(0, penalty.h, self.start_of_window), penalty))
-                    c.active_penalties.append(penalty)
+                # for c in next_penalty_candidates:
+                #     penalty = PenaltyEvent(self.penalty_timestep, c, len(c.active_penalties) + 1)
+                #     self.eventQ.append((get_next_time(0, penalty.h, self.start_of_window), penalty))
+                #     c.active_penalties.append(penalty)
 
                 # Update saved starting event queue
                 self.eventQ_at_start = [(t, e) for t, e in self.eventQ]
@@ -737,7 +737,7 @@ class TimelineVisualizer:
 
 if __name__ == "__main__":
     # Logging setup
-    prefix = "SingleBallWithRollbackDissipationTest"
+    prefix = "SingleBallForcedRollbackComparisonCheck"
     do_log = True
     logger = NumpyLogger(do_log, prefix)
 

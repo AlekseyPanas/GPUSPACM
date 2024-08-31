@@ -303,6 +303,12 @@ class SPACM1DSim:
                                                           p) for p in wall_positions]
         self.collideables: list[Collidable] = self.walls + self.particles
 
+        c = self.walls[0]
+        for _ in range(13):
+            penalty = PenaltyEvent(self.penalty_timestep, c, len(c.active_penalties) + 1)
+            self.eventQ.append((get_next_time(0, penalty.h, self.start_of_window), penalty))
+            c.active_penalties.append(penalty)
+
         self.do_compute_energy = compute_energy  # Should energy be tracked at each snapshot
         self.gravity_base = gravity_energy_base  # Vertical position of "ground" relative to which to compute gravitational energy
 
@@ -370,47 +376,47 @@ class SPACM1DSim:
 
             # Checks missed collisions
             next_penalty_candidates: list[Collidable] = []  # Objects whose next penalty layer needs activating
-            for c in self.collideables:  # Checking c's penalty layers
-                move_on = False  # Used as a "break" flag to exit loops once c has been added to the list
-                for p in self.particles:  # Moving particles which may have entered a new penalty layer for c
-                    if p is not c:  # Don't detect against self, duh
-
-                        # All snapshots where p or c had a velocity change (guaranteed to also include the first and snapshot
-                        # of this rollback window)
-                        velocity_changed_timestamps = sorted(
-                                c.get_velocity_changed_timestamps(self.start_of_window,
-                                                                  self.end_of_window).union(
-                                p.get_velocity_changed_timestamps(self.start_of_window, self.end_of_window)))
-
-                        # Loop through intervals between above snapshots
-                        for i in range(len(velocity_changed_timestamps) - 1):
-                            # Get thickness of c's next inactive penalty layer
-                            c_next_thickness = c.get_lth_thickness(len(c.active_penalties) + 1)
-
-                            # interval time bounds
-                            t0 = velocity_changed_timestamps[i]
-                            t1 = velocity_changed_timestamps[i+1]
-
-                            c_positions = [c.get_pos_at_time(t0), c.get_pos_at_time(t1)]
-                            p_positions = [p.get_pos_at_time(t0), p.get_pos_at_time(t1)]
-
-                            # Check if particle is already within the penalty layer at start of this interval
-                            if c_positions[0] - c_next_thickness <= p_positions[0] <= c_positions[0] + c_next_thickness:
-                                next_penalty_candidates.append(c)
-
-                            # Check if there's a t0 <= t <= t1 for which the particle enters the penalty layer
-                            else:
-                                # Solving two linear equations
-                                denom = (c_positions[1] - c_positions[0]) - (p_positions[1] - p_positions[0])
-                                if denom != 0:
-                                    collision1_t = (p_positions[0] - c_positions[0] - c_next_thickness) / denom
-                                    collision2_t = (p_positions[0] - c_positions[0] + c_next_thickness) / denom
-
-                                    if 0 <= collision1_t <= 1 or 0 <= collision2_t <= 1:
-                                        next_penalty_candidates.append(c)
-                                        move_on = True
-                            if move_on: break
-                        if move_on: break
+            # for c in self.collideables:  # Checking c's penalty layers
+            #     move_on = False  # Used as a "break" flag to exit loops once c has been added to the list
+            #     for p in self.particles:  # Moving particles which may have entered a new penalty layer for c
+            #         if p is not c:  # Don't detect against self, duh
+            #
+            #             # All snapshots where p or c had a velocity change (guaranteed to also include the first and snapshot
+            #             # of this rollback window)
+            #             velocity_changed_timestamps = sorted(
+            #                     c.get_velocity_changed_timestamps(self.start_of_window,
+            #                                                       self.end_of_window).union(
+            #                     p.get_velocity_changed_timestamps(self.start_of_window, self.end_of_window)))
+            #
+            #             # Loop through intervals between above snapshots
+            #             for i in range(len(velocity_changed_timestamps) - 1):
+            #                 # Get thickness of c's next inactive penalty layer
+            #                 c_next_thickness = c.get_lth_thickness(len(c.active_penalties) + 1)
+            #
+            #                 # interval time bounds
+            #                 t0 = velocity_changed_timestamps[i]
+            #                 t1 = velocity_changed_timestamps[i+1]
+            #
+            #                 c_positions = [c.get_pos_at_time(t0), c.get_pos_at_time(t1)]
+            #                 p_positions = [p.get_pos_at_time(t0), p.get_pos_at_time(t1)]
+            #
+            #                 # Check if particle is already within the penalty layer at start of this interval
+            #                 if c_positions[0] - c_next_thickness <= p_positions[0] <= c_positions[0] + c_next_thickness:
+            #                     next_penalty_candidates.append(c)
+            #
+            #                 # Check if there's a t0 <= t <= t1 for which the particle enters the penalty layer
+            #                 else:
+            #                     # Solving two linear equations
+            #                     denom = (c_positions[1] - c_positions[0]) - (p_positions[1] - p_positions[0])
+            #                     if denom != 0:
+            #                         collision1_t = (p_positions[0] - c_positions[0] - c_next_thickness) / denom
+            #                         collision2_t = (p_positions[0] - c_positions[0] + c_next_thickness) / denom
+            #
+            #                         if 0 <= collision1_t <= 1 or 0 <= collision2_t <= 1:
+            #                             next_penalty_candidates.append(c)
+            #                             move_on = True
+            #                 if move_on: break
+            #             if move_on: break
 
             # Initiate rollback
             if len(next_penalty_candidates) > 0:
@@ -438,40 +444,40 @@ class SPACM1DSim:
                 for p in self.particles:
                     p.current_snapshots = [p.current_snapshots[-1]]
 
-                # Remove penalties
-                for c in self.collideables:
-                    innermost_colliding_layer = None
-
-                    # Finds index of c's innermost layer which is exerting a force on at least one particle
-                    for i in range(len(c.active_penalties) - 1,  -1, -1):  # Loop backwards through active penalties
-                        anyone_colliding = False
-
-                        for p in self.particles:
-                            if c.active_penalties[i].get_force(p) != 0:
-                                anyone_colliding = True
-                                break
-
-                        if anyone_colliding:
-                            innermost_colliding_layer = i
-                            break
-
-                    def remove_penalties_from_eventQ(penalties):
-                        tups_to_remove = []
-                        for tup in self.eventQ:
-                            if tup[1] in penalties:
-                                tups_to_remove.append(tup)
-                        for tup in tups_to_remove:
-                            self.eventQ.remove(tup)
-                        heapq.heapify(self.eventQ)
-
-                    # No layer is exerting force, remove all
-                    if innermost_colliding_layer is None:
-                        remove_penalties_from_eventQ(c.active_penalties)
-                        c.active_penalties = []
-                    # Innermost layer i is exerting force. Keep i and all layers further out than i. Delete the rest
-                    else:
-                        remove_penalties_from_eventQ(c.active_penalties[innermost_colliding_layer+1:])
-                        c.active_penalties = c.active_penalties[:innermost_colliding_layer+1]
+                # # Remove penalties
+                # for c in self.collideables:
+                #     innermost_colliding_layer = None
+                #
+                #     # Finds index of c's innermost layer which is exerting a force on at least one particle
+                #     for i in range(len(c.active_penalties) - 1,  -1, -1):  # Loop backwards through active penalties
+                #         anyone_colliding = False
+                #
+                #         for p in self.particles:
+                #             if c.active_penalties[i].get_force(p) != 0:
+                #                 anyone_colliding = True
+                #                 break
+                #
+                #         if anyone_colliding:
+                #             innermost_colliding_layer = i
+                #             break
+                #
+                #     def remove_penalties_from_eventQ(penalties):
+                #         tups_to_remove = []
+                #         for tup in self.eventQ:
+                #             if tup[1] in penalties:
+                #                 tups_to_remove.append(tup)
+                #         for tup in tups_to_remove:
+                #             self.eventQ.remove(tup)
+                #         heapq.heapify(self.eventQ)
+                #
+                #     # No layer is exerting force, remove all
+                #     if innermost_colliding_layer is None:
+                #         remove_penalties_from_eventQ(c.active_penalties)
+                #         c.active_penalties = []
+                #     # Innermost layer i is exerting force. Keep i and all layers further out than i. Delete the rest
+                #     else:
+                #         remove_penalties_from_eventQ(c.active_penalties[innermost_colliding_layer+1:])
+                #         c.active_penalties = c.active_penalties[:innermost_colliding_layer+1]
 
                 # Update bounds to next window and save event queue state
                 self.start_of_window = self.end_of_window
@@ -737,12 +743,12 @@ class TimelineVisualizer:
 
 if __name__ == "__main__":
     # Logging setup
-    prefix = "SingleBallWithRollbackDissipationTest"
+    prefix = "SingleBallHardcodedLayersDissipationTest"
     do_log = True
     logger = NumpyLogger(do_log, prefix)
 
     sim = SPACM1DSim(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, logger)
-    # sim = SPACM1DSim(0.03, -1, 0.01, [3, 5], [0, 1], [0], [1, 1], 1, 1, 0.01, logger)  # Working two-particle sim, but bounces are too far
+    # sim = SPACM1DSim(0.03, -1, 0.01, [3, 5], [0, 1], [0], [1, 1], 1, 1, 0.01, logger)  # Working two-particle sim, but bounces are too far 13
     #sim = SPACM1DSim(0.03, -1, 0.01, [3, 5, 7], [0, 1, 2], [0, 8], [1, 1, 1], 1, 1, 0.01, logger)  # Working three-particle two-wall sim, but bounces are too far
 
     # sim = SPACM1DSim(0.03, -1, 0.001, [3, 5, 7], [0, 1, 2], [0], [1, 1, 1], 4, 0.3, 0.001)  # Working two-particle sim, bounces not far, but is slow

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Optional, Iterable
 from enum import IntEnum
 import os
+import struct
 
 
 class SnapshotType(IntEnum):
@@ -29,6 +30,7 @@ class Snapshot:
     potential_energy: Optional[float]
     penalty_energy: Optional[float]
     snap_type: SnapshotType
+    event_identifier: int
 
 
 class DataReader:
@@ -67,17 +69,24 @@ class NumpyDataReader(DataReader):
 
     def event_granular(self):
         for row in self.dat:
-            yield [Snapshot(particle[0], particle[1], particle[2], particle[3],
-                            particle[4], particle[5], particle[6], SnapshotType(int(particle[7]))) for particle in row]
+            yield [(particle[0], particle[1], particle[2], particle[3],
+                            particle[4], particle[5], particle[6], particle[7],
+                            particle[8]) for particle in row]
+            # yield [Snapshot(particle[0], particle[1], particle[2], particle[3],
+            #                 particle[4], particle[5], particle[6], SnapshotType(int(particle[7])),
+            #                 particle[8]) for particle in row]
 
     def window_granular(self):
         for r in range(self.dat.shape[0]):
             if self.dat[r][0][7] == SnapshotType.WINDOW_GRANULAR.value and (
                     self.dat.shape[0] == r + 1 or self.dat[r + 1][0][7] != SnapshotType.ROLLBACK.value
             ):
-                yield [Snapshot(particle[0], particle[1], particle[2], particle[3],
-                                particle[4], particle[5], particle[6], SnapshotType(particle[7]))
-                 for particle in self.dat[r]]
+                yield [(particle[0], particle[1], particle[2], particle[3],
+                                particle[4], particle[5], particle[6], particle[7], particle[8])
+                       for particle in self.dat[r]]
+                # yield [Snapshot(particle[0], particle[1], particle[2], particle[3],
+                #                 particle[4], particle[5], particle[6], SnapshotType(particle[7]), particle[8])
+                #        for particle in self.dat[r]]
 
 
 class Converter:
@@ -113,21 +122,52 @@ class Converter:
 
 
 class TextConverter(Converter):
+    def __init__(self, reader: DataReader, foldername: str, ignore_zero_force_events=False, ignore_rollbacks=False):
+        super().__init__(reader, foldername)
+        self.ignore_zero = ignore_zero_force_events
+        self.ignore_rollbacks = ignore_rollbacks
+
     def number_of_suffixes(self) -> int: return 2
 
     def parse_last_part(self, suffix: str) -> int: return int(suffix)
 
     def convert(self):
+        def f(x):
+            return bin(struct.unpack('!i', struct.pack('!f', x))[0])
+
         for p in range(self.reader.get_num_particles()):
             with open(os.path.join(".", self.folder_name,
                                    self.reader.get_file_name() + f"-P{p}-{self.output_number}"), "w") as file:
-                for snapshots in self.reader.event_granular():
-                    if snapshots[p].snap_type == SnapshotType.ROLLBACK:
-                        file.write("ROLLBACK\n")
+                cached_str = ""
+                just_saw_end_of_window = False
+                prev_vel = -5
+                for tups in self.reader.event_granular():
+
+                    if tups[p][7] == SnapshotType.ROLLBACK.value:
+                        # Dump data to file if rollbacks not ignored
+                        if not self.ignore_rollbacks:
+                            cached_str += "ROLLBACK\n"
+                            file.write(cached_str)
+                        cached_str = ""
+                        just_saw_end_of_window = False
+
                     else:
-                        file.write(f"t={snapshots[p].t}  x={snapshots[p].x}  v={snapshots[p].v}  "
-                                   f"E={snapshots[p].energy}  Ek={snapshots[p].kinetic_energy}  "
-                                   f"Eg={snapshots[p].potential_energy}  Ep={snapshots[p].penalty_energy}\n")
+                        if just_saw_end_of_window:
+                            cached_str += "-----------------\n"
+                            file.write(cached_str)
+                            cached_str = ""
+                            just_saw_end_of_window = False
+
+                        if (not self.ignore_zero) or tups[p][1] != prev_vel or \
+                                tups[p][7] == SnapshotType.WINDOW_GRANULAR.value:
+                            cached_str += f"t={f(tups[p][2])}  ev={f(tups[p][8])}  " \
+                                          f"x={f(tups[p][0])}  v={f(tups[p][1])}  " \
+                                          f"E={f(tups[p][3])}  Ek={f(tups[p][4])}  " \
+                                          f"Eg={f(tups[p][5])}  Ep={f(tups[p][6])}\n"
+                        prev_vel = tups[p][1]
+
+                    if tups[p][7] == SnapshotType.WINDOW_GRANULAR.value:
+                        just_saw_end_of_window = True
 
 
 class MatplotlibConverter(Converter):
@@ -288,7 +328,7 @@ if __name__ == "__main__":
     opt_idx = choose_option_from_list(options)
 
     if opt_idx == 0:
-        TextConverter(reader, "textlogs").convert()
+        TextConverter(reader, "textlogs", False, False).convert()
     elif opt_idx == 1:
         MatplotlibConverter(reader, "matplotlibplots").convert()
     elif opt_idx == 2:
