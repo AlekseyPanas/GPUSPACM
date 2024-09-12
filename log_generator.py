@@ -48,9 +48,20 @@ class DataReader:
         """Return an iterable of all recorded snapshots of the simulation for all particles"""
 
     @abstractmethod
+    def event_granular_raw(self) -> list[list[tuple]]:
+        """Return an iterable of all recorded snapshots of the simulation for all particles. The data returned
+        is a raw tuple containing unparsed numerical data corresponding to parameters in the Snapshot class"""
+
+    @abstractmethod
     def window_granular(self) -> list[list[Snapshot]]:
         """Return iterable of snapshots at the end of successful (non-rollback) time windows
         for all particles throughout the simulation"""
+
+    @abstractmethod
+    def window_granular_raw(self) -> list[list[tuple]]:
+        """Return iterable of snapshots at the end of successful (non-rollback) time windows
+        for all particles throughout the simulation. The data returned is a raw tuple containing
+        unparsed numerical data corresponding to parameters in the Snapshot class"""
 
 
 class NumpyDataReader(DataReader):
@@ -69,24 +80,33 @@ class NumpyDataReader(DataReader):
 
     def event_granular(self):
         for row in self.dat:
-            yield [(particle[0], particle[1], particle[2], particle[3],
-                            particle[4], particle[5], particle[6], particle[7],
+            yield [Snapshot(particle[0], particle[1], particle[2], particle[3],
+                            particle[4], particle[5], particle[6], SnapshotType(int(particle[7])),
                             particle[8]) for particle in row]
-            # yield [Snapshot(particle[0], particle[1], particle[2], particle[3],
-            #                 particle[4], particle[5], particle[6], SnapshotType(int(particle[7])),
-            #                 particle[8]) for particle in row]
 
-    def window_granular(self):
+    def __loop_window(self):
         for r in range(self.dat.shape[0]):
             if self.dat[r][0][7] == SnapshotType.WINDOW_GRANULAR.value and (
                     self.dat.shape[0] == r + 1 or self.dat[r + 1][0][7] != SnapshotType.ROLLBACK.value
-            ):
-                yield [(particle[0], particle[1], particle[2], particle[3],
-                                particle[4], particle[5], particle[6], particle[7], particle[8])
-                       for particle in self.dat[r]]
-                # yield [Snapshot(particle[0], particle[1], particle[2], particle[3],
-                #                 particle[4], particle[5], particle[6], SnapshotType(particle[7]), particle[8])
-                #        for particle in self.dat[r]]
+            ): yield r
+
+    def window_granular(self):
+        for r in self.__loop_window():
+            yield [Snapshot(particle[0], particle[1], particle[2], particle[3],
+                            particle[4], particle[5], particle[6], SnapshotType(particle[7]), particle[8])
+                   for particle in self.dat[r]]
+
+    def event_granular_raw(self) -> list[list[tuple]]:
+        for row in self.dat:
+            yield [(particle[0], particle[1], particle[2], particle[3],
+                    particle[4], particle[5], particle[6], particle[7],
+                    particle[8]) for particle in row]
+
+    def window_granular_raw(self) -> list[list[tuple]]:
+        for r in self.__loop_window():
+            yield [(particle[0], particle[1], particle[2], particle[3],
+                            particle[4], particle[5], particle[6], particle[7], particle[8])
+                   for particle in self.dat[r]]
 
 
 class Converter:
@@ -122,28 +142,35 @@ class Converter:
 
 
 class TextConverter(Converter):
-    def __init__(self, reader: DataReader, foldername: str, ignore_zero_force_events=False, ignore_rollbacks=False):
+    def __init__(self, reader: DataReader, foldername: str, ignore_zero_force_events=False, ignore_rollbacks=False,
+                 is_binary=False):
         super().__init__(reader, foldername)
         self.ignore_zero = ignore_zero_force_events
         self.ignore_rollbacks = ignore_rollbacks
+        self.is_binary = is_binary
 
     def number_of_suffixes(self) -> int: return 2
 
     def parse_last_part(self, suffix: str) -> int: return int(suffix)
 
     def convert(self):
-        def f(x):
+        def convert_binary(x):
             return bin(struct.unpack('!i', struct.pack('!f', x))[0])
+
+        def convert_identity(x):
+            return x
 
         for p in range(self.reader.get_num_particles()):
             with open(os.path.join(".", self.folder_name,
                                    self.reader.get_file_name() + f"-P{p}-{self.output_number}"), "w") as file:
+                f = convert_binary if self.is_binary else convert_identity
                 cached_str = ""
                 just_saw_end_of_window = False
                 prev_vel = -5
-                for tups in self.reader.event_granular():
+                for tups in (self.reader.event_granular_raw() if self.is_binary else self.reader.event_granular()):
+                    snapshot_type = tups[p][7] if self.is_binary else tups[p][7].value
 
-                    if tups[p][7] == SnapshotType.ROLLBACK.value:
+                    if snapshot_type == SnapshotType.ROLLBACK.value:
                         # Dump data to file if rollbacks not ignored
                         if not self.ignore_rollbacks:
                             cached_str += "ROLLBACK\n"
@@ -159,14 +186,14 @@ class TextConverter(Converter):
                             just_saw_end_of_window = False
 
                         if (not self.ignore_zero) or tups[p][1] != prev_vel or \
-                                tups[p][7] == SnapshotType.WINDOW_GRANULAR.value:
+                                snapshot_type == SnapshotType.WINDOW_GRANULAR.value:
                             cached_str += f"t={f(tups[p][2])}  ev={f(tups[p][8])}  " \
                                           f"x={f(tups[p][0])}  v={f(tups[p][1])}  " \
                                           f"E={f(tups[p][3])}  Ek={f(tups[p][4])}  " \
                                           f"Eg={f(tups[p][5])}  Ep={f(tups[p][6])}\n"
                         prev_vel = tups[p][1]
 
-                    if tups[p][7] == SnapshotType.WINDOW_GRANULAR.value:
+                    if snapshot_type == SnapshotType.WINDOW_GRANULAR.value:
                         just_saw_end_of_window = True
 
 
@@ -328,7 +355,7 @@ if __name__ == "__main__":
     opt_idx = choose_option_from_list(options)
 
     if opt_idx == 0:
-        TextConverter(reader, "textlogs", False, False).convert()
+        TextConverter(reader, "textlogs", False, False, True).convert()
     elif opt_idx == 1:
         MatplotlibConverter(reader, "matplotlibplots").convert()
     elif opt_idx == 2:
