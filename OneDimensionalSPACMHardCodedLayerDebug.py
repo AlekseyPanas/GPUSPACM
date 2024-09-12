@@ -220,7 +220,7 @@ class NumpyLogger(Logger):
         if self.folder_name not in os.listdir("."):
             os.mkdir(f"./{self.folder_name}")
 
-        self.filepath = f"{self.folder_name}/{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}.npy"
+        self.filepath = os.path.join(self.folder_name, "".join((c if c != ":" else "." for c in f"{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}.npy")))
         self.do_log = do_log
         self.did_init = False
 
