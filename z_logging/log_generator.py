@@ -143,11 +143,12 @@ class Converter:
 
 class TextConverter(Converter):
     def __init__(self, reader: DataReader, foldername: str, ignore_zero_force_events=False, ignore_rollbacks=False,
-                 is_binary=False):
+                 is_binary=False, show_percentages=False):
         super().__init__(reader, foldername)
         self.ignore_zero = ignore_zero_force_events
         self.ignore_rollbacks = ignore_rollbacks
         self.is_binary = is_binary
+        self.show_percentages = show_percentages
 
     def number_of_suffixes(self) -> int: return 2
 
@@ -167,7 +168,9 @@ class TextConverter(Converter):
                 cached_str = ""
                 just_saw_end_of_window = False
                 prev_vel = -5
-                for tups in (self.reader.event_granular_raw() if self.is_binary else self.reader.event_granular()):
+                events = self.reader.event_granular_raw() if self.is_binary else self.reader.event_granular()
+                for idx, tups in enumerate(events):
+                    if self.show_percentages: print(f"---- {idx / len(events)}%")
                     snapshot_type = tups[p][7] if self.is_binary else tups[p][7].value
 
                     if snapshot_type == SnapshotType.ROLLBACK.value:
@@ -355,7 +358,7 @@ if __name__ == "__main__":
     opt_idx = choose_option_from_list(options)
 
     if opt_idx == 0:
-        TextConverter(reader, "textlogs", False, False, True).convert()
+        TextConverter(reader, "textlogs", False, False, True, True).convert()
     elif opt_idx == 1:
         MatplotlibConverter(reader, "matplotlibplots").convert()
     elif opt_idx == 2:
