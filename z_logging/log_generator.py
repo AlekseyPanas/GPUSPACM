@@ -114,13 +114,13 @@ class Converter:
         self.reader = reader
         self.folder_name = foldername
 
-        if foldername not in os.listdir("."):
-            os.mkdir(f"./{foldername}")
+        if foldername not in os.listdir(".."):
+            os.mkdir(f"../{foldername}")
 
         self.output_number = self.get_latest_output_number() + 1
 
     def get_latest_output_number(self):
-        vals = [self.parse_last_part(f.split("-")[-1]) for f in os.listdir(f"./{self.folder_name}") if
+        vals = [self.parse_last_part(f.split("-")[-1]) for f in os.listdir(f"../{self.folder_name}") if
                 "-".join(f.split("-")[:-self.number_of_suffixes()]) == self.reader.get_file_name()]
         return -1 if len(vals) == 0 else max(vals)
 
@@ -162,7 +162,7 @@ class TextConverter(Converter):
             return x
 
         for p in range(self.reader.get_num_particles()):
-            with open(os.path.join(".", self.folder_name,
+            with open(os.path.join("..", self.folder_name,
                                    self.reader.get_file_name() + f"-P{p}-{self.output_number}"), "w") as file:
                 f = convert_binary if self.is_binary else convert_identity
                 cached_str = ""
@@ -170,7 +170,7 @@ class TextConverter(Converter):
                 prev_vel = -5
                 events = self.reader.event_granular_raw() if self.is_binary else self.reader.event_granular()
                 for idx, tups in enumerate(events):
-                    if self.show_percentages: print(f"---- {idx / len(events)}%")
+                    if self.show_percentages: print(f"---- {idx}")
                     snapshot_type = tups[p][7] if self.is_binary else tups[p][7].value
 
                     if snapshot_type == SnapshotType.ROLLBACK.value:
@@ -346,12 +346,12 @@ def choose_option_from_list(opts: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    if "npdat" not in os.listdir("."):
-        os.mkdir("./npdat")
+    if "npdat" not in os.listdir(".."):
+        os.mkdir("../npdat")
 
-    file_idx = choose_option_from_list(os.listdir("./npdat"))
+    file_idx = choose_option_from_list(os.listdir("../npdat"))
 
-    filepath = os.path.join(".", "npdat", os.listdir("./npdat")[file_idx])
+    filepath = os.path.join("..", "npdat", os.listdir("../npdat")[file_idx])
     reader = NumpyDataReader(filepath)
 
     options = ["Text", "Matplotlib", "Tensorboard", "Tensorboard without Rollback"]
