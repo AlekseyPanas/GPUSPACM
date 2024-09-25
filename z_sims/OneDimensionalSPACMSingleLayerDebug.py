@@ -2,7 +2,11 @@ from __future__ import  annotations
 
 import heapq
 
-from core import *
+from z_sims.core.sim import Sim
+from z_sims.core.events import Event, GravityEvent, PenaltyEvent
+from z_sims.core.objects import Collidable, Particle
+from z_sims.core.data import YieldType, Snapshot
+from z_sims.core.util import get_next_time
 from z_logging.loggers import Logger
 
 

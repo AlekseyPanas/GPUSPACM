@@ -1,6 +1,6 @@
 from __future__ import annotations
 from abc import abstractmethod
-from z_sims.core import Snapshot
+from z_sims.core.data import Snapshot
 from npy_append_array import NpyAppendArray
 import numpy as np
 import os
@@ -38,16 +38,24 @@ class Logger:
 
 
 class NumpyLogger(Logger):
-    def __init__(self, do_log: bool, custom_experiment_prefix: str, cache_size=300):
+    FOLDER_NAME = "npdat"
+    """
+    cache_size: This is the number of logs that will be stored in memory before writing to file (a.k.a batch size)
+    custom_experiment_prefix: This is a string name to identify the experiment. It will be included in the log filename
+    log_root_folder_path: This is a path to the directory where logs are stored. npy data will be writen to this dir /npdat
+    """
+    def __init__(self, log_root_folder_path: str, do_log: bool, custom_experiment_prefix: str, cache_size=300):
         """cache_size indicates how many records to store before flushing to file"""
         self.dat: np.ndarray | None = None
         self.num_particles = -1
 
-        self.folder_name = "npdat"
-        if self.folder_name not in os.listdir("."):
-            os.mkdir(f"./{self.folder_name}")
+        self.folder_name = self.FOLDER_NAME
+        if self.folder_name not in os.listdir(log_root_folder_path):
+            os.mkdir(os.path.join(log_root_folder_path, self.folder_name))
 
-        self.filepath = os.path.join(self.folder_name, "".join((c if c != ":" else "." for c in f"{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}.npy")))
+        self.filepath = os.path.join(
+            log_root_folder_path, self.folder_name,
+            "".join((c if c != ":" else "." for c in f"{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}.npy")))
         self.do_log = do_log
         self.did_init = False
 

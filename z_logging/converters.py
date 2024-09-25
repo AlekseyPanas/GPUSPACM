@@ -2,12 +2,13 @@
 Simulations save data in npy files. This script provides utilities to read and output that data into
 other formats such as txt, tensorboard, or matplotlib
 """
+from __future__ import annotations
 from tensorboardX import SummaryWriter
 import numpy as np
 from matplotlib import pyplot as plt
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Optional, Iterable
+from typing import Optional
 from enum import IntEnum
 import os
 import struct
@@ -110,17 +111,18 @@ class NumpyDataReader(DataReader):
 
 
 class Converter:
-    def __init__(self, reader: DataReader, foldername: str):
+    def __init__(self, reader: DataReader, foldername: str, log_root_folder_path: str):
         self.reader = reader
         self.folder_name = foldername
+        self.folder_path = os.path.join(log_root_folder_path, foldername)
 
-        if foldername not in os.listdir(".."):
-            os.mkdir(f"../{foldername}")
+        if foldername not in os.listdir(log_root_folder_path):
+            os.mkdir(self.folder_path)
 
         self.output_number = self.get_latest_output_number() + 1
 
     def get_latest_output_number(self):
-        vals = [self.parse_last_part(f.split("-")[-1]) for f in os.listdir(f"../{self.folder_name}") if
+        vals = [self.parse_last_part(f.split("-")[-1]) for f in os.listdir(self.folder_path) if
                 "-".join(f.split("-")[:-self.number_of_suffixes()]) == self.reader.get_file_name()]
         return -1 if len(vals) == 0 else max(vals)
 
@@ -142,9 +144,10 @@ class Converter:
 
 
 class TextConverter(Converter):
-    def __init__(self, reader: DataReader, foldername: str, ignore_zero_force_events=False, ignore_rollbacks=False,
+    def __init__(self, reader: DataReader, foldername: str, log_root_folder_path: str,
+                 ignore_zero_force_events=False, ignore_rollbacks=False,
                  is_binary=False, show_percentages=False):
-        super().__init__(reader, foldername)
+        super().__init__(reader, foldername, log_root_folder_path)
         self.ignore_zero = ignore_zero_force_events
         self.ignore_rollbacks = ignore_rollbacks
         self.is_binary = is_binary
@@ -162,7 +165,7 @@ class TextConverter(Converter):
             return x
 
         for p in range(self.reader.get_num_particles()):
-            with open(os.path.join("..", self.folder_name,
+            with open(os.path.join(self.folder_path,
                                    self.reader.get_file_name() + f"-P{p}-{self.output_number}"), "w") as file:
                 f = convert_binary if self.is_binary else convert_identity
                 cached_str = ""
@@ -211,7 +214,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].x for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Height")
-        plt.savefig(os.path.join(self.folder_name, f"{self.reader.get_file_name()}-position-{self.output_number}.png"))
+        plt.savefig(os.path.join(self.folder_path, f"{self.reader.get_file_name()}-position-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -219,7 +222,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].v for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Velocity")
-        plt.savefig(os.path.join(self.folder_name, f"{self.reader.get_file_name()}-velocity-{self.output_number}.png"))
+        plt.savefig(os.path.join(self.folder_path, f"{self.reader.get_file_name()}-velocity-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -227,7 +230,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].energy for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Energy")
-        plt.savefig(os.path.join(self.folder_name, f"{self.reader.get_file_name()}-energy-{self.output_number}.png"))
+        plt.savefig(os.path.join(self.folder_path, f"{self.reader.get_file_name()}-energy-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -235,7 +238,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].kinetic_energy for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Kinetic Energy")
-        plt.savefig(os.path.join(self.folder_name, f"{self.reader.get_file_name()}-kineticenergy-{self.output_number}.png"))
+        plt.savefig(os.path.join(self.folder_path, f"{self.reader.get_file_name()}-kineticenergy-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -243,7 +246,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].potential_energy for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Potential Energy")
-        plt.savefig(os.path.join(self.folder_name, f"{self.reader.get_file_name()}-potentialenergy-{self.output_number}.png"))
+        plt.savefig(os.path.join(self.folder_path, f"{self.reader.get_file_name()}-potentialenergy-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -251,13 +254,13 @@ class MatplotlibConverter(Converter):
                      [snaps[p].penalty_energy for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Penalty Energy")
-        plt.savefig(os.path.join(self.folder_name, f"{self.reader.get_file_name()}-penaltyenergy-{self.output_number}.png"))
+        plt.savefig(os.path.join(self.folder_path, f"{self.reader.get_file_name()}-penaltyenergy-{self.output_number}.png"))
         plt.clf()
 
 
-class TensorboardLogger(Converter):
-    def __init__(self, reader: DataReader, foldername: str, only_window: bool):
-        super().__init__(reader, foldername)
+class TensorboardConverter(Converter):
+    def __init__(self, reader: DataReader, foldername: str, log_root_folder_path: str, only_window: bool):
+        super().__init__(reader, foldername, log_root_folder_path)
         self.only_window = only_window  # When true only records snapshots at the end of each window, ignores rollback
 
     def number_of_suffixes(self) -> int: return 1
@@ -265,7 +268,7 @@ class TensorboardLogger(Converter):
     def parse_last_part(self, suffix: str) -> int: return int(suffix)
 
     def convert(self):
-        writer = SummaryWriter(os.path.join(self.folder_name, self.reader.get_file_name() + f"-{self.output_number}"))
+        writer = SummaryWriter(os.path.join(self.folder_path, self.reader.get_file_name() + f"-{self.output_number}"))
 
         if self.only_window:
             self.positions = [[snap.x for snap in snaps] for snaps in self.reader.window_granular()]
@@ -328,42 +331,3 @@ class TensorboardLogger(Converter):
         writer.close()
 
         self.output_number += 1
-
-
-def choose_option_from_list(opts: list[str]) -> int:
-    print("\n".join(f"[{idx}] {opt}" for idx, opt in enumerate(opts)))
-    print("=============")
-    while True:
-        try:
-            opt_idx = int(input("Select an option: ").strip())
-            if opt_idx >= len(opts) or opt_idx < 0:
-                print("Bruh that ain't one of the given options dawg")
-            else:
-                break
-        except Exception:
-            print("Bruh that ain't a number dawg")
-    return opt_idx
-
-
-if __name__ == "__main__":
-    if "npdat" not in os.listdir(".."):
-        os.mkdir("../npdat")
-
-    file_idx = choose_option_from_list(os.listdir("../npdat"))
-
-    filepath = os.path.join("..", "npdat", os.listdir("../npdat")[file_idx])
-    reader = NumpyDataReader(filepath)
-
-    options = ["Text", "Matplotlib", "Tensorboard", "Tensorboard without Rollback"]
-    opt_idx = choose_option_from_list(options)
-
-    if opt_idx == 0:
-        TextConverter(reader, "textlogs", False, False, True, True).convert()
-    elif opt_idx == 1:
-        MatplotlibConverter(reader, "matplotlibplots").convert()
-    elif opt_idx == 2:
-        TensorboardLogger(reader, "runs", False).convert()
-    elif opt_idx == 3:
-        TensorboardLogger(reader, "runs", True).convert()
-    else:
-        print("Sus.... this codepath should be impossible")

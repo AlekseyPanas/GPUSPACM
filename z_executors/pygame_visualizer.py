@@ -1,7 +1,10 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from z_sims.core.data import YieldType, Snapshot
+from z_sims.core.events import PenaltyEvent
+from z_sims.core.sim import Sim
+from z_sims.core.objects import Collidable, Particle
 import colorsys
-from z_sims.core import *
+from dataclasses import dataclass
 import pygame
 pygame.init()
 
