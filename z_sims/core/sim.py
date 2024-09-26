@@ -33,11 +33,11 @@ class Sim:
         """Get size of the rollback window, R"""
 
     @abstractmethod
-    def get_eventQ(self) -> list[tuple[float, Event]]:
+    def get_eventQ(self) -> list[tuple[float, int, Event]]:
         """Get all upcoming events"""
 
     @abstractmethod
-    def get_past_events(self) -> list[tuple[float, Event]]:
+    def get_past_events(self) -> list[tuple[float, int, Event]]:
         """Get all events which have already been executed"""
 
     @abstractmethod

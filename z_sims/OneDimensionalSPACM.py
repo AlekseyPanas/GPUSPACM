@@ -252,7 +252,7 @@ class SPACM1DSim(Sim):
     def get_particles(self) -> list[Particle]: return self.particles
     def get_walls(self) -> list[Collidable]: return self.walls
     def get_window_size(self) -> float: return self.R
-    def get_eventQ(self) -> list[tuple[float, Event]]: return self.eventQ
-    def get_past_events(self) -> list[tuple[float, Event]]: return self.past_events
+    def get_eventQ(self) -> list[tuple[float, int, Event]]: return self.eventQ
+    def get_past_events(self) -> list[tuple[float, int, Event]]: return self.past_events
     def get_logger(self) -> Logger: return self.logger
     def get_sim_time(self) -> float: return self.sim_time

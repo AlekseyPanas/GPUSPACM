@@ -1,5 +1,6 @@
 from __future__ import annotations
 from z_sims.OneDimensionalSPACM import SPACM1DSim
+from z_sims.OneDimensionalSPACMHardCodedLayers import SPACM1DSimHardcodedLayers
 from z_logging.loggers import NumpyLogger
 from z_executors.pygame_visualizer import PygameVisualizer
 from z_executors.nogui_executor import NoGuiExecutor
@@ -12,8 +13,8 @@ if __name__ == "__main__":
     # Logging setup
     do_log = True
 
-    sim = SPACM1DSim(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, NumpyLogger(LOG_ROOT_PATH, do_log, "SingleBallWithRollbackDissipationTest"))
-    # sim = SPACM1DSimHardcodedLayers(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, NumpyLogger(LOG_ROOT_PATH, do_log, "SingleBallHardcodedLayersDissipationTest"))
+    # sim = SPACM1DSim(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, NumpyLogger(LOG_ROOT_PATH, do_log, "SingleBallWithRollbackDissipationTest"))
+    sim = SPACM1DSimHardcodedLayers(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, NumpyLogger(LOG_ROOT_PATH, do_log, "SingleBallHardcodedLayersDissipationTest"))
     # sim = SPACM1DSim(30, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, NumpyLogger(LOG_ROOT_PATH, do_log, "SingleBallWithRollbackDissipationTestHugeWindow"))
 
     # sim = SPACM1DSim(0.03, -1, 0.01, [3, 5], [0, 1], [0], [1, 1], 1, 1, 0.01, logger)  # Working two-particle sim, but bounces are too far
@@ -28,4 +29,4 @@ if __name__ == "__main__":
     # visualizer = PygameVisualizer((800, 800), sim, 1.1, 0.005)
     # visualizer.run()
 
-    NoGuiExecutor(sim).set_mode_sim_time(100).run()
+    NoGuiExecutor(sim).set_mode_sim_time(10000).run()
