@@ -27,7 +27,7 @@ if __name__ == "__main__":
 
     file_idx = choose_option_from_list(os.listdir(NPY_LOG_PATH))
 
-    filepath = os.path.join(NPY_LOG_PATH, os.listdir("../npdat")[file_idx])
+    filepath = os.path.join(NPY_LOG_PATH, os.listdir(NPY_LOG_PATH)[file_idx])
     reader = NumpyDataReader(filepath)
 
     options = ["Text", "Matplotlib", "Tensorboard (w/ rollback)", "Tensorboard (w/o rollback)"]

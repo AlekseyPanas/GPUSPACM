@@ -1,6 +1,7 @@
 from __future__ import annotations
 from z_sims.core.events import PenaltyEvent
 from z_sims.core.data import Snapshot
+import math
 
 
 class Collidable:

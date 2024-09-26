@@ -209,12 +209,15 @@ class MatplotlibConverter(Converter):
     def parse_last_part(self, suffix: str) -> int: return int(suffix.split(".")[0])
 
     def convert(self):
+        subfolder_path = os.path.join(self.folder_path, f"{self.reader.get_file_name()}-{self.output_number}")
+        os.mkdir(subfolder_path)
+
         for p in range(self.reader.get_num_particles()):
             plt.plot([snaps[p].t for snaps in self.reader.window_granular()],
                      [snaps[p].x for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Height")
-        plt.savefig(os.path.join(self.folder_path, f"{self.reader.get_file_name()}-position-{self.output_number}.png"))
+        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_file_name()}-position-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -222,7 +225,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].v for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Velocity")
-        plt.savefig(os.path.join(self.folder_path, f"{self.reader.get_file_name()}-velocity-{self.output_number}.png"))
+        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_file_name()}-velocity-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -230,7 +233,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].energy for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Energy")
-        plt.savefig(os.path.join(self.folder_path, f"{self.reader.get_file_name()}-energy-{self.output_number}.png"))
+        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_file_name()}-energy-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -238,7 +241,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].kinetic_energy for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Kinetic Energy")
-        plt.savefig(os.path.join(self.folder_path, f"{self.reader.get_file_name()}-kineticenergy-{self.output_number}.png"))
+        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_file_name()}-kineticenergy-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -246,7 +249,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].potential_energy for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Potential Energy")
-        plt.savefig(os.path.join(self.folder_path, f"{self.reader.get_file_name()}-potentialenergy-{self.output_number}.png"))
+        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_file_name()}-potentialenergy-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -254,7 +257,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].penalty_energy for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Penalty Energy")
-        plt.savefig(os.path.join(self.folder_path, f"{self.reader.get_file_name()}-penaltyenergy-{self.output_number}.png"))
+        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_file_name()}-penaltyenergy-{self.output_number}.png"))
         plt.clf()
 
 

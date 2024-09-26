@@ -30,7 +30,7 @@ class Logger:
 
     @abstractmethod
     def output_data(self):
-        """Output current data. This may be called multiple times in the same simulation"""
+        """Write any cached data to disc. This may be called multiple times in the same simulation"""
 
     @abstractmethod
     def quit(self):
@@ -46,7 +46,6 @@ class NumpyLogger(Logger):
     """
     def __init__(self, log_root_folder_path: str, do_log: bool, custom_experiment_prefix: str, cache_size=300):
         """cache_size indicates how many records to store before flushing to file"""
-        self.dat: np.ndarray | None = None
         self.num_particles = -1
 
         self.folder_name = self.FOLDER_NAME
@@ -63,21 +62,23 @@ class NumpyLogger(Logger):
         if self.do_log:
             self.handle = NpyAppendArray(self.filepath, delete_if_exists=True)
 
-        self.cache: np.ndarray = np.array([])
+        self.cache: np.ndarray | None = None
 
         self.cache_size = cache_size
         self.cache_counter = 0
 
-    def __init_array(self, num_particles):
-        self.dat = np.ndarray([0, num_particles, 8])
-        self.num_particles = num_particles
+    def __init_array(self):
+        self.cache = np.ndarray([0, self.num_particles, 9])
 
     def __increment_and_flush_cache(self):
         self.cache_counter += 1
         if self.cache_counter >= self.cache_size:
             self.cache_counter = 0
-            self.handle.append(self.cache)
-            self.cache = np.array([])
+            self.__flush()
+
+    def __flush(self):
+        self.handle.append(self.cache)
+        self.__init_array()
 
     def record_config(self, params: dict):
         if not self.do_log: return
@@ -95,7 +96,8 @@ class NumpyLogger(Logger):
         if not self.do_log: return
         if not self.did_init:
             self.did_init = True
-            self.__init_array(len(snapshots))
+            self.num_particles = len(snapshots)
+            self.__init_array()
 
         self.cache = np.concatenate([self.cache, np.array([[
             [snap.x, snap.v, snap.t, snap.energy, snap.kinetic_energy,
@@ -113,7 +115,8 @@ class NumpyLogger(Logger):
         self.__increment_and_flush_cache()
 
     def output_data(self):
-        pass
+        self.__flush()
 
     def quit(self):
+        self.__flush()
         self.handle.close()

@@ -11,9 +11,9 @@ if __name__ == "__main__":
     # Logging setup
     do_log = True
 
-    # sim = SPACM1DSim(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, NumpyLogger(do_log, "SingleBallWithRollbackDissipationTest"))
-    # sim = SPACM1DSimHardcodedLayers(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, NumpyLogger(do_log, "SingleBallHardcodedLayersDissipationTest"))
-    sim = SPACM1DSim(30, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, NumpyLogger(LOG_ROOT_PATH, do_log, "SingleBallWithRollbackDissipationTestHugeWindow"))
+    sim = SPACM1DSim(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, NumpyLogger(LOG_ROOT_PATH, do_log, "SingleBallWithRollbackDissipationTest"))
+    # sim = SPACM1DSimHardcodedLayers(0.03, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, NumpyLogger(LOG_ROOT_PATH, do_log, "SingleBallHardcodedLayersDissipationTest"))
+    # sim = SPACM1DSim(30, -1, 0.005, [3], [0], [0], [1], 1, 0.5, 0.005, NumpyLogger(LOG_ROOT_PATH, do_log, "SingleBallWithRollbackDissipationTestHugeWindow"))
 
     # sim = SPACM1DSim(0.03, -1, 0.01, [3, 5], [0, 1], [0], [1, 1], 1, 1, 0.01, logger)  # Working two-particle sim, but bounces are too far
     # sim = SPACM1DSim(0.03, -1, 0.01, [3, 5, 7], [0, 1, 2], [0, 8], [1, 1, 1], 1, 1, 0.01, logger)  # Working three-particle two-wall sim, but bounces are too far
