@@ -2,6 +2,7 @@ from __future__ import annotations
 from z_sims.OneDimensionalSPACM import SPACM1DSim
 from z_logging.loggers import NumpyLogger
 from z_executors.pygame_visualizer import PygameVisualizer
+from z_executors.nogui_executor import NoGuiExecutor
 import os
 
 LOG_ROOT_PATH = os.getcwd()
@@ -24,5 +25,7 @@ if __name__ == "__main__":
     # sim = SPACM1DSim(0.03, -1, 0.01, [10], [0], [0], [1], 1, 0.1, 0.01)  # Infinite loop
     # sim = SPACM1DSim(0.03, -1, 0.03, [10], [0], [0], [1], 1, 0.05, 0.03)  # Infinite loop
 
-    visualizer = PygameVisualizer((800, 800), sim, 1.1, 0.005)
-    visualizer.run()
+    # visualizer = PygameVisualizer((800, 800), sim, 1.1, 0.005)
+    # visualizer.run()
+
+    NoGuiExecutor(sim).set_mode_sim_time(100).run()

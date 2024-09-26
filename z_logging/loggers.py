@@ -108,10 +108,11 @@ class NumpyLogger(Logger):
     def record_window_snapshots(self, snapshots: list[Snapshot]):
         if not self.do_log: return
 
-        self.cache = np.concatenate([self.cache, np.array([[
+        new_dat = np.array([[
             [snap.x, snap.v, snap.t, snap.energy, snap.kinetic_energy,
              snap.potential_energy, snap.penalty_energy, 1.0, -1.0] for snap in snapshots
-        ]])])
+        ]])
+        self.cache = np.concatenate([self.cache, new_dat])
         self.__increment_and_flush_cache()
 
     def output_data(self):

@@ -6,7 +6,7 @@ from z_sims.core.sim import Sim
 from z_sims.core.events import Event, GravityEvent, PenaltyEvent
 from z_sims.core.objects import Collidable, Particle
 from z_sims.core.data import YieldType, Snapshot
-from z_sims.core.util import get_next_time
+from z_sims.core.util import get_next_time, get_next_index
 from z_logging.loggers import Logger
 
 
@@ -21,21 +21,21 @@ class SPACM1DSim(Sim):
         self.logger = logger
         self.logger.record_config(locals())
 
-        self.past_events: list[tuple[float, Event]] = []  # History for logging
+        self.past_events: list[tuple[float, int, Event]] = []  # History for logging
 
         self.R = rollback_window_size
         self.penalty_timestep = penalty_timestep
 
-        self.eventQ: list[tuple[float, Event]] = []
+        self.eventQ: list[tuple[float, int, Event]] = []  # Time, timestep index (i.e time = timestep_index * event_dt), Event
 
         self.accel_gravity = accel_gravity
 
         # Schedule first gravity event
-        heapq.heappush(self.eventQ, (timestep_gravity, GravityEvent(timestep_gravity, accel_gravity)))
+        heapq.heappush(self.eventQ, (timestep_gravity, 1, GravityEvent(timestep_gravity, accel_gravity)))
 
         self.start_of_window = 0
         self.end_of_window = self.R
-        self.eventQ_at_start = [(t, e) for t, e in self.eventQ]  # Copies event queue
+        self.eventQ_at_start = [(t, tidx, e) for t, tidx, e in self.eventQ]  # Copies event queue
 
         self.particles: list[Particle] = [Particle(collision_stiffness, penalty_layer_thickness,
                                                    particle_positions[i], particle_velocities[i],
@@ -48,10 +48,13 @@ class SPACM1DSim(Sim):
         self.do_compute_energy = compute_energy  # Should energy be tracked at each snapshot
         self.gravity_base = gravity_energy_base  # Vertical position of "ground" relative to which to compute gravitational energy
 
+        self.sim_time = 0  # Tracks the time of the latest processed event
+
     def run_sim(self):
         while True:
             while self.eventQ[0][0] <= self.end_of_window:
-                te, e = heapq.heappop(self.eventQ)  # time, event
+                te, tidx, e = heapq.heappop(self.eventQ)  # time, event
+                self.sim_time = te
 
                 for p in self.particles:
                     p0 = p.current_snapshots[-1]
@@ -61,40 +64,56 @@ class SPACM1DSim(Sim):
 
                     p.current_snapshots.append(Snapshot(x1, -1, t1, None, False, None, None, None, e.get_identifier()))  # Add new snapshot with placeholder v and has_velocity_changed
 
-                for p in self.particles:
+                pop_snapshot_particle_idx = []  # idx of particles for which this event doesn't act, so we'll pop the snapshot to not bloat the log
+                for pi in range(len(self.particles)):
+                    p = self.particles[pi]
+                    force = e.get_force(p)
+
                     p0 = p.current_snapshots[-2]
                     pc = p.current_snapshots[-1]
+                    if force != 0:
+                        v1_5 = p0.v + (e.h / 2) * (e.get_force(p) / p.mass)  # record energy at halfway vel update
+                        v1 = p0.v + e.h * (e.get_force(p) / p.mass)  # integrate force with respect to force's timestep
 
-                    v1_5 = p0.v + (e.h / 2) * (e.get_force(p) / p.mass)  # record energy at halfway vel update
-                    v1 = p0.v + e.h * (e.get_force(p) / p.mass)  # integrate force with respect to force's timestep
+                        # Update placeholder v and has_velocity_changed values
+                        pc.has_velocity_changed = p0.v != v1
+                        pc.v = v1
 
-                    # Update placeholder v and has_velocity_changed values
-                    pc.has_velocity_changed = p0.v != v1
-                    pc.v = v1
+                        # Update energy
+                        if self.do_compute_energy:
+                            Eg = p.mass * abs(self.accel_gravity) * (pc.x - self.gravity_base)  # E_gravity = mgh
+                            Ek = 0.5 * p.mass * (v1_5 ** 2)  # E_kinetic = 1/2 mv^2
+                            Ep = 0
+                            for c in self.collideables:
+                                if c is not p:
+                                    for pen in c.active_penalties:
+                                        gap = pen.get_gap(p.get_latest_position())
+                                        if gap <= 0:
+                                            Ep += 0.5 * c.get_lth_stiffness(pen.layer) * (gap ** 2)
+                            Etotal = Eg + Ek + Ep
+                            pc.energy = Etotal
+                            pc.kinetic_energy = Ek
+                            pc.potential_energy = Eg
+                            pc.penalty_energy = Ep
+                    else:
+                        pc.energy = p0.energy
+                        pc.kinetic_energy = p0.kinetic_energy
+                        pc.potential_energy = p0.potential_energy
+                        pc.penalty_energy = p0.penalty_energy
+                        pc.v = p0.v
+                        pop_snapshot_particle_idx.append(pi)
 
-                    # Update energy
-                    if self.do_compute_energy:
-                        Eg = p.mass * abs(self.accel_gravity) * (pc.x - self.gravity_base)  # E_gravity = mgh
-                        Ek = 0.5 * p.mass * (v1_5 ** 2)  # E_kinetic = 1/2 mv^2
-                        Ep = 0
-                        for c in self.collideables:
-                            if c is not p:
-                                for pen in c.active_penalties:
-                                    gap = pen.get_gap(p.get_latest_position())
-                                    if gap <= 0:
-                                        Ep += 0.5 * c.get_lth_stiffness(pen.layer) * (gap ** 2)
-                        Etotal = Eg + Ek + Ep
-                        pc.energy = Etotal
-                        pc.kinetic_energy = Ek
-                        pc.potential_energy = Eg
-                        pc.penalty_energy = Ep
+                if len(pop_snapshot_particle_idx) == len(self.particles):  # If this event didn't affect anyone, clear those snapshots
+                    for ii in pop_snapshot_particle_idx:
+                        self.particles[ii].current_snapshots.pop(-1)
 
                 # Event-granular log: latest snapshot of all particles
-                self.logger.record_snapshots([p.current_snapshots[-1] for p in self.particles])
+                else:
+                    self.logger.record_snapshots([p.current_snapshots[-1] for p in self.particles])
 
-                heapq.heappush(self.eventQ, (te + e.h, e))  # Schedule next force event
+                heapq.heappush(self.eventQ, ((tidx + 1) * e.h, tidx + 1, e))  # Schedule next force event
 
-                self.past_events.append((te, e))  # Record processed event
+                self.past_events.append((te, tidx, e))  # Record processed event
 
                 yield YieldType.EVENT_FINISHED, self
 
@@ -159,16 +178,22 @@ class SPACM1DSim(Sim):
                 # Rollback
                 for p in self.particles:
                     p.current_snapshots = [p.current_snapshots[0]]  # Reset snapshots
-                self.eventQ = [(t, e) for t, e in self.eventQ_at_start]  # Restore initial event queue
+                self.eventQ = [(t, tidx, e) for t, tidx, e in self.eventQ_at_start]  # Restore initial event queue
 
                 # Engage new penalty layers
                 for c in next_penalty_candidates:
                     penalty = PenaltyEvent(self.penalty_timestep, c, len(c.active_penalties) + 1)
-                    self.eventQ.append((get_next_time(0, penalty.h, self.start_of_window), penalty))
+                    next_idx = get_next_index(0, penalty.h, self.start_of_window)
+                    self.eventQ.append((next_idx * penalty.h, next_idx, penalty))
                     c.active_penalties.append(penalty)
 
+                    # Assert that these new layers exert 0 force on all particles
+                    for p in self.particles:
+                        if p is not c:
+                            assert penalty.get_force(p) == 0
+
                 # Update saved starting event queue
-                self.eventQ_at_start = [(t, e) for t, e in self.eventQ]
+                self.eventQ_at_start = [(t, tidx, e) for t, tidx, e in self.eventQ]
 
                 # Notify logger that rollback has occurred
                 self.logger.rollback()
@@ -200,7 +225,7 @@ class SPACM1DSim(Sim):
                     def remove_penalties_from_eventQ(penalties):
                         tups_to_remove = []
                         for tup in self.eventQ:
-                            if tup[1] in penalties:
+                            if tup[2] in penalties:
                                 tups_to_remove.append(tup)
                         for tup in tups_to_remove:
                             self.eventQ.remove(tup)
@@ -218,7 +243,7 @@ class SPACM1DSim(Sim):
                 # Update bounds to next window and save event queue state
                 self.start_of_window = self.end_of_window
                 self.end_of_window = self.start_of_window + self.R
-                self.eventQ_at_start = [(t, e) for t, e in self.eventQ]
+                self.eventQ_at_start = [(t, tidx, e) for t, tidx, e in self.eventQ]
 
                 yield YieldType.TIME_WINDOW_FINISHED, self
 
@@ -230,3 +255,4 @@ class SPACM1DSim(Sim):
     def get_eventQ(self) -> list[tuple[float, Event]]: return self.eventQ
     def get_past_events(self) -> list[tuple[float, Event]]: return self.past_events
     def get_logger(self) -> Logger: return self.logger
+    def get_sim_time(self) -> float: return self.sim_time

@@ -193,7 +193,8 @@ class PygameVisualizer:
                 self.settings_font.render(f"(P) Show Penalty Layers: {show_penalties}", True, (0, 0, 0)),
                 self.settings_font.render(f"(A) Auto Run: {auto}", True, (0, 0, 0)),
                 self.settings_font.render(f"(T) Adjust Timeline: {do_adjust_timeline}", True, (0, 0, 0)),
-                self.settings_font.render(f"(H) Show Timeline: {show_timeline}", True, (0, 0, 0))
+                self.settings_font.render(f"(H) Show Timeline: {show_timeline}", True, (0, 0, 0)),
+                self.settings_font.render(f"Current Sim Time: {self.sim.get_sim_time()}", True, (0, 0, 0))
             ):
                 self.screen.blit(text, (self.screen_size[0] - text.get_width() - padding, y))
                 y += text.get_height() + padding
@@ -239,7 +240,7 @@ class TimelineVisualizer:
         surf = pygame.Surface(self.dims, pygame.SRCALPHA, 32)
         pygame.draw.line(surf, (0, 0, 0), (tick_pos, 0), (tick_pos, self.dims[1]), 2)
 
-        for t, e in sim.get_past_events() + sim.get_eventQ():
+        for t, tidx, e in sim.get_past_events() + sim.get_eventQ():
             pos = self.cam.world_to_screen_space(self.dims[1], t)
             if 0 <= pos <= self.dims[1]:
                 if isinstance(e, PenaltyEvent):

@@ -43,3 +43,7 @@ class Sim:
     @abstractmethod
     def get_logger(self) -> Logger:
         """Get the underlying logger used by this simulation to record data"""
+
+    @abstractmethod
+    def get_sim_time(self) -> float:
+        """Get the time of the simulation currently (latest event processed)"""
