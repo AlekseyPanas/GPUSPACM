@@ -171,10 +171,10 @@ class TextConverter(Converter):
                 cached_str = ""
                 just_saw_end_of_window = False
                 prev_vel = -5
-                events = self.reader.event_granular_raw() if self.is_binary else self.reader.event_granular()
+                events = self.reader.event_granular_raw()
                 for idx, tups in enumerate(events):
                     if self.show_percentages: print(f"---- {idx}")
-                    snapshot_type = tups[p][7] if self.is_binary else tups[p][7].value
+                    snapshot_type = tups[p][7]
 
                     if snapshot_type == SnapshotType.ROLLBACK.value:
                         # Dump data to file if rollbacks not ignored

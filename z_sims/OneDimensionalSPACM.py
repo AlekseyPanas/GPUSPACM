@@ -51,9 +51,19 @@ class SPACM1DSim(Sim):
         self.sim_time = 0  # Tracks the time of the latest processed event
 
     def run_sim(self):
+        prev_t = None
+        prev_t_store = None
         while True:
             while self.eventQ[0][0] <= self.end_of_window:
                 te, tidx, e = heapq.heappop(self.eventQ)  # time, event
+
+                try:
+                    assert prev_t is None or te > prev_t
+                except AssertionError as e:
+                    print(e)
+                    print(te - prev_t, prev_t, te)
+                prev_t = te
+
                 self.sim_time = te
 
                 for p in self.particles:
@@ -191,9 +201,11 @@ class SPACM1DSim(Sim):
                     for p in self.particles:
                         if p is not c:
                             assert penalty.get_force(p) == 0
+                heapq.heapify(self.eventQ)
 
                 # Update saved starting event queue
                 self.eventQ_at_start = [(t, tidx, e) for t, tidx, e in self.eventQ]
+                prev_t = prev_t_store
 
                 # Notify logger that rollback has occurred
                 self.logger.rollback()
@@ -244,6 +256,7 @@ class SPACM1DSim(Sim):
                 self.start_of_window = self.end_of_window
                 self.end_of_window = self.start_of_window + self.R
                 self.eventQ_at_start = [(t, tidx, e) for t, tidx, e in self.eventQ]
+                prev_t_store = prev_t
 
                 yield YieldType.TIME_WINDOW_FINISHED, self
 
