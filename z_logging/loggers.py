@@ -9,7 +9,7 @@ from datetime import datetime
 
 class Logger:
     @abstractmethod
-    def record_config(self, params: dict):
+    def record_config(self, params: dict, num_particles: int):
         """Provides a locals() object of the simulation parameters in __init__. Use this to record the configuration
         of a given experiment"""
 
@@ -52,31 +52,45 @@ class NumpyLogger(Logger):
         """cache_size indicates how many records to store before flushing to file"""
         self.num_particles = -1
 
+        # Create outer folder if not there
         self.folder_name = self.FOLDER_NAME
+        self.folder_path = os.path.join(log_root_folder_path, self.folder_name)
         if self.folder_name not in os.listdir(log_root_folder_path):
-            os.mkdir(os.path.join(log_root_folder_path, self.folder_name))
+            os.mkdir(self.folder_path)
 
-        filename_root = "".join((c if c != ":" else "." for c in f"{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}"))
+        # Create subfolder if not there
+        self.subfolder_name = "".join((c if c != ":" else "." for c in f"{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}"))
+        self.subfolder_path = os.path.join(self.folder_path, self.subfolder_name)
+        if self.subfolder_name not in os.listdir(self.folder_path):
+            os.mkdir(self.subfolder_path)
+
+        # Store file handles for each particle's individual file as well as the global event file
+        self.particle_handles = []
+        self.particle_caches: list[np.ndarray] = []
+        self.event_handle = None
+        self.event_cache: np.ndarray | None = None
+
+        self.do_log = do_log
+
+        # Track the cache to flush to file
+        self.cache_size = cache_size
+        self.cache_counter = 0
+
+        self.did_init = False
+
+
+
         filename_main = filename_root + ".npy"
         filename_totalenergy = filename_root + "-totalenergy.npy"
         self.filepath_main = os.path.join(log_root_folder_path, self.folder_name, filename_main)
         self.filepath_totalenergy = os.path.join(log_root_folder_path, self.folder_name, filename_totalenergy)
-        self.do_log = do_log
-        self.did_init = False
 
-        self.handle_main = None
-        self.handle_totalenergy = None
         if self.do_log:
             self.handle_main = NpyAppendArray(self.filepath_main, delete_if_exists=True)
             self.handle_totalenergy = NpyAppendArray(self.filepath_totalenergy, delete_if_exists=True)
 
-        self.cache_main: np.ndarray | None = None
-        self.cache_totalenergy: np.ndarray | None = None
-
-        self.cache_size = cache_size
-        self.cache_counter = 0
-
-    def __init_array(self):
+    def __reset_cache(self):
+        """Clear all caches"""
         self.cache = np.ndarray([0, self.num_particles, 9])
 
     def __increment_and_flush_cache(self):
@@ -86,14 +100,34 @@ class NumpyLogger(Logger):
             self.__flush()
 
     def __flush(self):
+        """Flush all caches to file and clear the caches"""
         self.handle.append(self.cache)
-        self.__init_array()
+        self.__reset_cache()
 
-    def record_config(self, params: dict):
+    def record_config(self, params: dict, num_particles: int):
         if not self.do_log: return
 
         with open(self.filepath + "-config.txt", "w") as file:
             file.write(str(params))
+
+    def record_event(self, t: float, total_energy: float, event_id: int, num_particles: int,
+                     snapshots: list[tuple[int, Snapshot]]):
+        pass
+
+    def record_window_catchup(self, t: float, total_energy: float, snapshots: list[Snapshot]):
+        pass
+
+    def record_rollback(self):
+        pass
+
+    def record_window_success(self):
+        pass
+
+    def output_data(self):
+        pass
+
+    def quit(self):
+        pass
 
     def record_rollback(self):
         if not self.do_log: return
@@ -106,7 +140,7 @@ class NumpyLogger(Logger):
         if not self.did_init:
             self.did_init = True
             self.num_particles = len(snapshots)
-            self.__init_array()
+            self.__reset_cache()
 
         self.cache = np.concatenate([self.cache, np.array([[
             [snap.x, snap.v, snap.t, snap.energy, snap.kinetic_energy,
