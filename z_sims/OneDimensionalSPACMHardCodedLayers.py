@@ -118,7 +118,7 @@ class SPACM1DSimHardcodedLayers(Sim):
 
                 # Event-granular log: latest snapshot of all particles
                 else:
-                    self.logger.record_snapshots([p.current_snapshots[-1] for p in self.particles])
+                    self.logger.record_event([p.current_snapshots[-1] for p in self.particles])
 
                 heapq.heappush(self.eventQ, ((tidx + 1) * e.h, tidx + 1, e))  # Schedule next force event
 

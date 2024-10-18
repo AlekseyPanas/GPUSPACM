@@ -9,24 +9,28 @@ from datetime import datetime
 
 class Logger:
     @abstractmethod
-    def rollback(self):
-        """Notifies the logger that a rollback has occurred. Subsequent datapoints will start in overlap"""
-
-    @abstractmethod
     def record_config(self, params: dict):
         """Provides a locals() object of the simulation parameters in __init__. Use this to record the configuration
         of a given experiment"""
 
     @abstractmethod
-    def record_snapshots(self, snapshots: list[Snapshot], total_energy: float):
-        """Record a new list of snapshots for every particle. The particle order in the given snapshots list is
-        maintained across all calls"""
+    def record_event(self, t: float, total_energy: float, event_id: int, num_particles: int, snapshots: list[tuple[int, Snapshot]]):
+        """Record a processed event. This includes the event time, the total energy after this event is processed,
+        the event identifier as decided by the sim, and a list of particle snapshots (paired with their index) of
+        particles affected by this event. The number of total particles is also provided"""
 
     @abstractmethod
-    def record_window_snapshots(self, snapshots: list[Snapshot], total_energy: float):
-        """Record a new list of snapshots for every particle. The particle order in the given snapshots list is
-        maintained across all calls. Unlike record_snapshots, this method is only called once at the end of a
-        successful rollback window. Useful in case you dont care about logging each rollback"""
+    def record_window_catchup(self, t: float, total_energy: float, snapshots: list[Snapshot]):
+        """Record the state of ALL particles at the end of a time window. This fires immediately after all events
+        for the time window have been processed BEFORE any rollback decision has been made."""
+
+    @abstractmethod
+    def record_rollback(self):
+        """Record that a rollback has occurred. Subsequent datapoints will start in overlap"""
+
+    @abstractmethod
+    def record_window_success(self):
+        """Record that the current window succeeded so subsequent datapoints will start in the next window"""
 
     @abstractmethod
     def output_data(self):
@@ -91,13 +95,13 @@ class NumpyLogger(Logger):
         with open(self.filepath + "-config.txt", "w") as file:
             file.write(str(params))
 
-    def rollback(self):
+    def record_rollback(self):
         if not self.do_log: return
 
         self.cache = np.concatenate([self.cache, np.array([[[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 2.0, -1.0] for _ in range(self.num_particles)]])])
         self.__increment_and_flush_cache()
 
-    def record_snapshots(self, snapshots: list[Snapshot], total_energy: float):
+    def record_event(self, snapshots: list[Snapshot], total_energy: float):
         if not self.do_log: return
         if not self.did_init:
             self.did_init = True

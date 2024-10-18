@@ -121,7 +121,7 @@ class SPACM1DSim(Sim):
 
                 # Event-granular log: latest snapshot of all particles
                 else:
-                    self.logger.record_snapshots([p.current_snapshots[-1] for p in self.particles])
+                    self.logger.record_event([p.current_snapshots[-1] for p in self.particles])
 
                 heapq.heappush(self.eventQ, ((tidx + 1) * e.h, tidx + 1, e))  # Schedule next force event
 
@@ -210,7 +210,7 @@ class SPACM1DSim(Sim):
                 prev_t = prev_t_store
 
                 # Notify logger that rollback has occurred
-                self.logger.rollback()
+                self.logger.record_rollback()
 
                 yield YieldType.TIME_WINDOW_FINISHED_ROLLBACK, self
 

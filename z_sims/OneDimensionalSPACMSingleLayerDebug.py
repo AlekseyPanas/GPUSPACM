@@ -122,7 +122,7 @@ class SPACM1DSimInfiniteLayer(Sim):
                     pc.energy = Etotal
 
             # Event-granular log: latest snapshot of all particles
-            self.logger.record_snapshots([p.current_snapshots[-1] for p in self.particles])
+            self.logger.record_event([p.current_snapshots[-1] for p in self.particles])
 
             heapq.heappush(self.eventQ, (te + e.h, e))  # Schedule next force event
 
