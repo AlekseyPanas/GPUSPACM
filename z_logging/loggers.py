@@ -18,12 +18,12 @@ class Logger:
         of a given experiment"""
 
     @abstractmethod
-    def record_snapshots(self, snapshots: list[Snapshot]):
+    def record_snapshots(self, snapshots: list[Snapshot], total_energy: float):
         """Record a new list of snapshots for every particle. The particle order in the given snapshots list is
         maintained across all calls"""
 
     @abstractmethod
-    def record_window_snapshots(self, snapshots: list[Snapshot]):
+    def record_window_snapshots(self, snapshots: list[Snapshot], total_energy: float):
         """Record a new list of snapshots for every particle. The particle order in the given snapshots list is
         maintained across all calls. Unlike record_snapshots, this method is only called once at the end of a
         successful rollback window. Useful in case you dont care about logging each rollback"""
@@ -52,17 +52,22 @@ class NumpyLogger(Logger):
         if self.folder_name not in os.listdir(log_root_folder_path):
             os.mkdir(os.path.join(log_root_folder_path, self.folder_name))
 
-        self.filepath = os.path.join(
-            log_root_folder_path, self.folder_name,
-            "".join((c if c != ":" else "." for c in f"{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}.npy")))
+        filename_root = "".join((c if c != ":" else "." for c in f"{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}"))
+        filename_main = filename_root + ".npy"
+        filename_totalenergy = filename_root + "-totalenergy.npy"
+        self.filepath_main = os.path.join(log_root_folder_path, self.folder_name, filename_main)
+        self.filepath_totalenergy = os.path.join(log_root_folder_path, self.folder_name, filename_totalenergy)
         self.do_log = do_log
         self.did_init = False
 
-        self.handle = None
+        self.handle_main = None
+        self.handle_totalenergy = None
         if self.do_log:
-            self.handle = NpyAppendArray(self.filepath, delete_if_exists=True)
+            self.handle_main = NpyAppendArray(self.filepath_main, delete_if_exists=True)
+            self.handle_totalenergy = NpyAppendArray(self.filepath_totalenergy, delete_if_exists=True)
 
-        self.cache: np.ndarray | None = None
+        self.cache_main: np.ndarray | None = None
+        self.cache_totalenergy: np.ndarray | None = None
 
         self.cache_size = cache_size
         self.cache_counter = 0
@@ -92,7 +97,7 @@ class NumpyLogger(Logger):
         self.cache = np.concatenate([self.cache, np.array([[[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 2.0, -1.0] for _ in range(self.num_particles)]])])
         self.__increment_and_flush_cache()
 
-    def record_snapshots(self, snapshots: list[Snapshot]):
+    def record_snapshots(self, snapshots: list[Snapshot], total_energy: float):
         if not self.do_log: return
         if not self.did_init:
             self.did_init = True
@@ -101,16 +106,16 @@ class NumpyLogger(Logger):
 
         self.cache = np.concatenate([self.cache, np.array([[
             [snap.x, snap.v, snap.t, snap.energy, snap.kinetic_energy,
-             snap.potential_energy, snap.penalty_energy, 0.0, snap.event_identifier] for snap in snapshots
+             snap.potential_energy, snap.penalty_energy, 0.0, snap.event_identifier, total_energy] for snap in snapshots
         ]])])
         self.__increment_and_flush_cache()
 
-    def record_window_snapshots(self, snapshots: list[Snapshot]):
+    def record_window_snapshots(self, snapshots: list[Snapshot], total_energy: float):
         if not self.do_log: return
 
         new_dat = np.array([[
             [snap.x, snap.v, snap.t, snap.energy, snap.kinetic_energy,
-             snap.potential_energy, snap.penalty_energy, 1.0, -1.0] for snap in snapshots
+             snap.potential_energy, snap.penalty_energy, 1.0, -1.0, total_energy] for snap in snapshots
         ]])
         self.cache = np.concatenate([self.cache, new_dat])
         self.__increment_and_flush_cache()

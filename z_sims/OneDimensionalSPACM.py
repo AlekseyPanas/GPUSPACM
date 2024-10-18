@@ -56,11 +56,12 @@ class SPACM1DSim(Sim):
         while True:
             while self.eventQ[0][0] <= self.end_of_window:
                 te, tidx, e = heapq.heappop(self.eventQ)  # time, event
+                #print(f"First: {e}")
 
                 try:
-                    assert prev_t is None or te > prev_t
-                except AssertionError as e:
-                    print(e)
+                    assert prev_t is None or te >= prev_t
+                except AssertionError as err:
+                    print(err)
                     print(te - prev_t, prev_t, te)
                 prev_t = te
 
@@ -71,6 +72,7 @@ class SPACM1DSim(Sim):
 
                     x1 = p0.x + ((te - p0.t) * p0.v)  # integrate position up to this event
                     t1 = te  # update to new time
+                    #print(f"Second: {e}")
 
                     p.current_snapshots.append(Snapshot(x1, -1, t1, None, False, None, None, None, e.get_identifier()))  # Add new snapshot with placeholder v and has_velocity_changed
 
@@ -194,14 +196,14 @@ class SPACM1DSim(Sim):
                 for c in next_penalty_candidates:
                     penalty = PenaltyEvent(self.penalty_timestep, c, len(c.active_penalties) + 1)
                     next_idx = get_next_index(0, penalty.h, self.start_of_window)
-                    self.eventQ.append((next_idx * penalty.h, next_idx, penalty))
+                    heapq.heappush(self.eventQ, (next_idx * penalty.h, next_idx, penalty))
                     c.active_penalties.append(penalty)
 
                     # Assert that these new layers exert 0 force on all particles
                     for p in self.particles:
                         if p is not c:
                             assert penalty.get_force(p) == 0
-                heapq.heapify(self.eventQ)
+                #heapq.heapify(self.eventQ)
 
                 # Update saved starting event queue
                 self.eventQ_at_start = [(t, tidx, e) for t, tidx, e in self.eventQ]
