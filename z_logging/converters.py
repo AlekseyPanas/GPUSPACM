@@ -14,10 +14,19 @@ import os
 import struct
 
 
-class SnapshotType(IntEnum):
-    EVENT_GRANULAR = 0
-    WINDOW_GRANULAR = 1
+class EntryType(IntEnum):
+    EVENT_ENTRY = 0
+    WINDOW_CATCHUP = 1
     ROLLBACK = 2
+    WINDOW_SUCCESS = 3
+
+
+@dataclass(unsafe_hash=True)
+class EventEntry:
+    t: float
+    entry_type: EntryType
+    total_energy: float
+    event_identifier: int
 
 
 @dataclass(unsafe_hash=True)
@@ -30,7 +39,6 @@ class Snapshot:
     kinetic_energy: Optional[float]
     potential_energy: Optional[float]
     penalty_energy: Optional[float]
-    snap_type: SnapshotType
     event_identifier: int
 
 
@@ -45,23 +53,27 @@ class DataReader:
         """Get the number of particles in the simulation that generated the data file being read by this reader"""
 
     @abstractmethod
-    def event_granular(self) -> list[list[Snapshot]]:
-        """Return an iterable of all recorded snapshots of the simulation for all particles"""
+    def event_entries(self) -> list[EventEntry]:
+        """Return an iterable of all event entries in the simulation"""
 
     @abstractmethod
-    def event_granular_raw(self) -> list[list[tuple]]:
-        """Return an iterable of all recorded snapshots of the simulation for all particles. The data returned
+    def event_granular(self, i) -> list[Snapshot]:
+        """Return an iterable of all recorded snapshots of the simulation for particle i"""
+
+    @abstractmethod
+    def event_granular_raw(self, i) -> list[tuple]:
+        """Return an iterable of all recorded snapshots of the simulation for particle i. The data returned
         is a raw tuple containing unparsed numerical data corresponding to parameters in the Snapshot class"""
 
     @abstractmethod
-    def window_granular(self) -> list[list[Snapshot]]:
+    def window_granular(self, i) -> list[Snapshot]:
         """Return iterable of snapshots at the end of successful (non-rollback) time windows
-        for all particles throughout the simulation"""
+        for particle at index i in the simulation"""
 
     @abstractmethod
-    def window_granular_raw(self) -> list[list[tuple]]:
+    def window_granular_raw(self, i) -> list[tuple]:
         """Return iterable of snapshots at the end of successful (non-rollback) time windows
-        for all particles throughout the simulation. The data returned is a raw tuple containing
+        for particle i throughout the simulation. The data returned is a raw tuple containing
         unparsed numerical data corresponding to parameters in the Snapshot class"""
 
 
@@ -69,45 +81,68 @@ class NumpyDataReader(DataReader):
     """Parses an .npy file with snapshot data. The snapshot data is expected as a 3D array
     where each 'row' is a list of snapshots for each particle. A snapshot is stored as an array
     of values in the order of the Snapshot dataclass"""
-    def __init__(self, filepath: str):
-        self.filepath = filepath
-        self.dat = np.load(filepath, mmap_mode="r")
+    def __init__(self, subfolder_path: str):
+        self.subfolder_path = subfolder_path
+
+        self.num_particles: int = len(os.listdir(self.subfolder_path)) - 1
+
+        self.event_filepath = None
+        self.particle_filepaths: list[str | None] = [None] * self.num_particles
+
+        for filename in os.listdir(self.subfolder_path):
+            if filename.endswith("-events.npy"):
+                self.event_filepath = os.path.join(self.subfolder_path, filename)
+            else:
+                self.particle_filepaths[int(filename[-5])] = filename
+
+        assert self.event_filepath is not None
+
+        self.event_dat = np.load(self.event_filepath, mmap_mode="r")
+        self.particle_dats = [np.load(path, mmap_mode="r") for path in self.particle_filepaths]
 
     def get_file_name(self):
-        return os.path.split(self.filepath)[-1]
+        return os.path.split(self.subfolder_path)[-1]
 
     def get_num_particles(self) -> int:
-        return self.dat.shape[1]
+        return self.num_particles
 
-    def event_granular(self):
-        for row in self.dat:
-            yield [Snapshot(particle[0], particle[1], particle[2], particle[3],
-                            particle[4], particle[5], particle[6], SnapshotType(int(particle[7])),
-                            particle[8]) for particle in row]
+    def event_entries(self) -> list[EventEntry]:
+        for ev in self.event_dat:
+            entry_type = {-3: EntryType.WINDOW_SUCCESS, -2: EntryType.ROLLBACK, -1: EntryType.WINDOW_CATCHUP}.get(ev[0], EntryType.EVENT_ENTRY)
+            if entry_type == EntryType.EVENT_ENTRY:
+                yield EventEntry(ev[1], entry_type, ev[2], -1)
+            else:
+                yield EventEntry(ev[1], entry_type, ev[2], ev[0])
 
-    def __loop_window(self):
-        for r in range(self.dat.shape[0]):
-            if self.dat[r][0][7] == SnapshotType.WINDOW_GRANULAR.value and (
-                    self.dat.shape[0] == r + 1 or self.dat[r + 1][0][7] != SnapshotType.ROLLBACK.value
+    def event_granular(self, i) -> list[Snapshot]:
+        for j in range(len(self.particle_dats[i])):
+            row = self.particle_dats[i][j]
+            yield Snapshot(row[1], row[2], self.event_dat[row[0]][1], row[3], row[4], row[5], row[6], self.event_dat[row[0]][0])
+
+    def event_granular_raw(self, i) -> list[list[tuple]]:
+        for j in range(len(self.particle_dats[i])):
+            row = self.particle_dats[i][j]
+            yield row[1], row[2], self.event_dat[row[0]][1], row[3], row[4], row[5], row[6], self.event_dat[row[0]][0]
+
+    def __loop_window(self, i):
+        for row in self.particle_dats[i]:
+            if self.event_dat[row[0]] == 
+
+            if self.event_dat[r][0][7] == EntryType.WINDOW_CATCHUP.value and (
+                    self.event_dat.shape[0] == r + 1 or self.event_dat[r + 1][0][7] != EntryType.ROLLBACK.value
             ): yield r
 
-    def window_granular(self):
-        for r in self.__loop_window():
+    def window_granular(self, i):
+        for r in self.__loop_window(i):
             yield [Snapshot(particle[0], particle[1], particle[2], particle[3],
-                            particle[4], particle[5], particle[6], SnapshotType(particle[7]), particle[8])
-                   for particle in self.dat[r]]
+                            particle[4], particle[5], particle[6], EntryType(particle[7]), particle[8])
+                   for particle in self.event_dat[r]]
 
-    def event_granular_raw(self) -> list[list[tuple]]:
-        for row in self.dat:
-            yield [(particle[0], particle[1], particle[2], particle[3],
-                    particle[4], particle[5], particle[6], particle[7],
-                    particle[8]) for particle in row]
-
-    def window_granular_raw(self) -> list[list[tuple]]:
-        for r in self.__loop_window():
+    def window_granular_raw(self, i) -> list[list[tuple]]:
+        for r in self.__loop_window(i):
             yield [(particle[0], particle[1], particle[2], particle[3],
                             particle[4], particle[5], particle[6], particle[7], particle[8])
-                   for particle in self.dat[r]]
+                   for particle in self.event_dat[r]]
 
 
 class Converter:
@@ -176,7 +211,7 @@ class TextConverter(Converter):
                     if self.show_percentages: print(f"---- {idx}")
                     snapshot_type = tups[p][7]
 
-                    if snapshot_type == SnapshotType.ROLLBACK.value:
+                    if snapshot_type == EntryType.ROLLBACK.value:
                         # Dump data to file if rollbacks not ignored
                         if not self.ignore_rollbacks:
                             cached_str += "ROLLBACK\n"
@@ -192,14 +227,14 @@ class TextConverter(Converter):
                             just_saw_end_of_window = False
 
                         if (not self.ignore_zero) or tups[p][1] != prev_vel or \
-                                snapshot_type == SnapshotType.WINDOW_GRANULAR.value:
+                                snapshot_type == EntryType.WINDOW_CATCHUP.value:
                             cached_str += f"t={f(tups[p][2])}  ev={f(tups[p][8])}  " \
                                           f"x={f(tups[p][0])}  v={f(tups[p][1])}  " \
                                           f"E={f(tups[p][3])}  Ek={f(tups[p][4])}  " \
                                           f"Eg={f(tups[p][5])}  Ep={f(tups[p][6])}\n"
                         prev_vel = tups[p][1]
 
-                    if snapshot_type == SnapshotType.WINDOW_GRANULAR.value:
+                    if snapshot_type == EntryType.WINDOW_CATCHUP.value:
                         just_saw_end_of_window = True
 
 
@@ -293,17 +328,17 @@ class TensorboardConverter(Converter):
                     writer.add_scalar(f"PenaltyEnergyP{p}", self.penalty_energies[i][p], int(self.times[i] * 100000))
 
         else:
-            self.positions = [[snap.x for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
-            self.velocities = [[snap.v for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
-            self.energies = [[snap.energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
-            self.kinetic_energies = [[snap.kinetic_energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
-            self.potential_energies = [[snap.potential_energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
-            self.penalty_energies = [[snap.penalty_energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
-            self.times = [snaps[0].t for snaps in self.reader.event_granular() if snaps[0].snap_type != SnapshotType.ROLLBACK]
+            self.positions = [[snap.x for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
+            self.velocities = [[snap.v for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
+            self.energies = [[snap.energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
+            self.kinetic_energies = [[snap.kinetic_energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
+            self.potential_energies = [[snap.potential_energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
+            self.penalty_energies = [[snap.penalty_energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
+            self.times = [snaps[0].t for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
             self.rollback_numbers = []
             self.cur_rollback = 0
             for snaps in self.reader.event_granular():
-                if snaps[0].snap_type == SnapshotType.ROLLBACK:
+                if snaps[0].snap_type == EntryType.ROLLBACK:
                     self.cur_rollback += 1
                 else:
                     self.rollback_numbers.append(self.cur_rollback)

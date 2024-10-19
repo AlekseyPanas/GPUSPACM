@@ -11,7 +11,7 @@ class Logger:
     @abstractmethod
     def record_config(self, params: dict, num_particles: int):
         """Provides a locals() object of the simulation parameters in __init__. Use this to record the configuration
-        of a given experiment"""
+        of a given experiment. This function is called once before all other logging so initialization can be done here"""
 
     @abstractmethod
     def record_event(self, t: float, total_energy: float, event_id: int, num_particles: int, snapshots: list[tuple[int, Snapshot]]):
@@ -42,12 +42,20 @@ class Logger:
 
 
 class NumpyLogger(Logger):
+    """
+    @param cache_size: This is the number of logs that will be stored in memory before writing to file (a.k.a batch size)
+    @param custom_experiment_prefix: This is a string name to identify the experiment. It will be included in the log filename
+    @param log_root_folder_path: This is a path to the directory where logs are stored. npy data will be writen to this dir /npdat
+
+    Event ID types:
+        >= 0: Event ID as assigned by simulator
+        -1: End of window catch up
+        -2: Rollback
+        -3: End of window success
+    """
+
     FOLDER_NAME = "npdat"
-    """
-    cache_size: This is the number of logs that will be stored in memory before writing to file (a.k.a batch size)
-    custom_experiment_prefix: This is a string name to identify the experiment. It will be included in the log filename
-    log_root_folder_path: This is a path to the directory where logs are stored. npy data will be writen to this dir /npdat
-    """
+
     def __init__(self, log_root_folder_path: str, do_log: bool, custom_experiment_prefix: str, cache_size=300):
         """cache_size indicates how many records to store before flushing to file"""
         self.num_particles = -1
@@ -66,9 +74,13 @@ class NumpyLogger(Logger):
 
         # Store file handles for each particle's individual file as well as the global event file
         self.particle_handles = []
+        self.particle_filenames = []
+        self.particle_filepaths = []
         self.particle_caches: list[np.ndarray] = []
         self.event_handle = None
         self.event_cache: np.ndarray | None = None
+
+        self.event_cur_idx = -1  # Tracks how many events were added thus far (idx)
 
         self.do_log = do_log
 
@@ -76,86 +88,79 @@ class NumpyLogger(Logger):
         self.cache_size = cache_size
         self.cache_counter = 0
 
-        self.did_init = False
-
-
-
-        filename_main = filename_root + ".npy"
-        filename_totalenergy = filename_root + "-totalenergy.npy"
-        self.filepath_main = os.path.join(log_root_folder_path, self.folder_name, filename_main)
-        self.filepath_totalenergy = os.path.join(log_root_folder_path, self.folder_name, filename_totalenergy)
-
-        if self.do_log:
-            self.handle_main = NpyAppendArray(self.filepath_main, delete_if_exists=True)
-            self.handle_totalenergy = NpyAppendArray(self.filepath_totalenergy, delete_if_exists=True)
-
     def __reset_cache(self):
         """Clear all caches"""
-        self.cache = np.ndarray([0, self.num_particles, 9])
+        self.particle_caches = [np.ndarray([0, 7]) for _ in range(self.num_particles)]
+        self.event_cache = np.ndarray([0, 3])
+
+    def __flush(self):
+        """Flush all caches to file and clear the caches"""
+        for i in range(self.num_particles):
+            self.particle_handles[i].append(self.particle_caches[i])
+        self.event_handle.append(self.event_cache)
+        self.__reset_cache()
 
     def __increment_and_flush_cache(self):
+        """Increment the cache counter and flush if cache size is maxed out"""
         self.cache_counter += 1
         if self.cache_counter >= self.cache_size:
             self.cache_counter = 0
             self.__flush()
 
-    def __flush(self):
-        """Flush all caches to file and clear the caches"""
-        self.handle.append(self.cache)
-        self.__reset_cache()
-
     def record_config(self, params: dict, num_particles: int):
         if not self.do_log: return
 
-        with open(self.filepath + "-config.txt", "w") as file:
+        self.num_particles = num_particles
+        self.particle_filenames = [self.subfolder_name + f"-particle-{i}.npy" for i in range(num_particles)]
+        self.particle_filepaths = [os.path.join(self.subfolder_path, filename) for filename in self.particle_filenames]
+        self.particle_handles = [NpyAppendArray(filepath, delete_if_exists=True) for filepath in self.particle_filepaths]
+        self.event_handle = NpyAppendArray(os.path.join(self.subfolder_path, self.subfolder_name + "-events.npy"), delete_if_exists=True)
+        self.__reset_cache()
+
+        with open(os.path.join(self.subfolder_path, self.subfolder_name + "-config.txt"), "w") as file:
             file.write(str(params))
 
     def record_event(self, t: float, total_energy: float, event_id: int, num_particles: int,
                      snapshots: list[tuple[int, Snapshot]]):
-        pass
+        if not self.do_log: return
+
+        # Add next event entry
+        self.event_cache = np.concatenate([self.event_cache, np.array([[event_id, t, total_energy]])])
+        self.event_cur_idx += 1
+
+        # For relevant particles, log particle snapshot into the particle's file
+        for pi, snap in snapshots:
+            self.particle_caches[pi] = np.concatenate([self.particle_caches[pi],
+                                                       np.array([[self.event_cur_idx, snap.x, snap.v, snap.energy, snap.kinetic_energy, snap.potential_energy, snap.penalty_energy]])])
+
+        self.__increment_and_flush_cache()
 
     def record_window_catchup(self, t: float, total_energy: float, snapshots: list[Snapshot]):
-        pass
+        if not self.do_log: return
+
+        # Add next event entry
+        self.event_cache = np.concatenate([self.event_cache, np.array([[-1, t, total_energy]])])
+        self.event_cur_idx += 1
+
+        for pi in range(len(snapshots)):
+            snap = snapshots[pi]
+            self.particle_caches[pi] = np.concatenate([self.particle_caches[pi],
+                                                       np.array([[self.event_cur_idx, snap.x, snap.v, snap.energy, snap.kinetic_energy, snap.potential_energy, snap.penalty_energy]])])
+
+        self.__increment_and_flush_cache()
 
     def record_rollback(self):
-        pass
+        if not self.do_log: return
+
+        self.event_cache = np.concatenate([self.event_cache, np.array([[-2, -1, -1]])])
+        self.event_cur_idx += 1
+        self.__increment_and_flush_cache()
 
     def record_window_success(self):
-        pass
-
-    def output_data(self):
-        pass
-
-    def quit(self):
-        pass
-
-    def record_rollback(self):
         if not self.do_log: return
 
-        self.cache = np.concatenate([self.cache, np.array([[[-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 2.0, -1.0] for _ in range(self.num_particles)]])])
-        self.__increment_and_flush_cache()
-
-    def record_event(self, snapshots: list[Snapshot], total_energy: float):
-        if not self.do_log: return
-        if not self.did_init:
-            self.did_init = True
-            self.num_particles = len(snapshots)
-            self.__reset_cache()
-
-        self.cache = np.concatenate([self.cache, np.array([[
-            [snap.x, snap.v, snap.t, snap.energy, snap.kinetic_energy,
-             snap.potential_energy, snap.penalty_energy, 0.0, snap.event_identifier, total_energy] for snap in snapshots
-        ]])])
-        self.__increment_and_flush_cache()
-
-    def record_window_snapshots(self, snapshots: list[Snapshot], total_energy: float):
-        if not self.do_log: return
-
-        new_dat = np.array([[
-            [snap.x, snap.v, snap.t, snap.energy, snap.kinetic_energy,
-             snap.potential_energy, snap.penalty_energy, 1.0, -1.0, total_energy] for snap in snapshots
-        ]])
-        self.cache = np.concatenate([self.cache, new_dat])
+        self.event_cache = np.concatenate([self.event_cache, np.array([[-3, -1, -1]])])
+        self.event_cur_idx += 1
         self.__increment_and_flush_cache()
 
     def output_data(self):
@@ -163,4 +168,6 @@ class NumpyLogger(Logger):
 
     def quit(self):
         self.__flush()
-        self.handle.close()
+        self.event_handle.close()
+        for h in self.particle_handles:
+            h.close()
