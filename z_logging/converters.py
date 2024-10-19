@@ -100,6 +100,20 @@ class NumpyDataReader(DataReader):
         self.event_dat = np.load(self.event_filepath, mmap_mode="r")
         self.particle_dats = [np.load(path, mmap_mode="r") for path in self.particle_filepaths]
 
+    @staticmethod
+    def __id_to_entry(event_id: int) -> EntryType:
+        """Given the event_id value from the raw numpy data, convert to the enum value"""
+        return {-3: EntryType.WINDOW_SUCCESS, -2: EntryType.ROLLBACK, -1: EntryType.WINDOW_CATCHUP}.get(event_id, EntryType.EVENT_ENTRY)
+
+    def __tuple_from_particle_data_row(self, row) -> tuple:
+        """Given a tuple of numpy data for a single entry of a particle snapshot, return a python tuple in the correct
+        order for the snapshot datastructure"""
+        return row[1], row[2], self.event_dat[row[0]][1], row[3], row[4], row[5], row[6], self.event_dat[row[0]][0]
+
+    def __snapshot_from_particle_data_row(self, row) -> Snapshot:
+        """Given a tuple of numpy data for a single entry of a particle snapshot, return a snapshot of this data"""
+        return Snapshot(*self.__tuple_from_particle_data_row(row))
+
     def get_file_name(self):
         return os.path.split(self.subfolder_path)[-1]
 
@@ -108,7 +122,7 @@ class NumpyDataReader(DataReader):
 
     def event_entries(self) -> list[EventEntry]:
         for ev in self.event_dat:
-            entry_type = {-3: EntryType.WINDOW_SUCCESS, -2: EntryType.ROLLBACK, -1: EntryType.WINDOW_CATCHUP}.get(ev[0], EntryType.EVENT_ENTRY)
+            entry_type = self.__id_to_entry(ev[0])
             if entry_type == EntryType.EVENT_ENTRY:
                 yield EventEntry(ev[1], entry_type, ev[2], -1)
             else:
@@ -117,32 +131,27 @@ class NumpyDataReader(DataReader):
     def event_granular(self, i) -> list[Snapshot]:
         for j in range(len(self.particle_dats[i])):
             row = self.particle_dats[i][j]
-            yield Snapshot(row[1], row[2], self.event_dat[row[0]][1], row[3], row[4], row[5], row[6], self.event_dat[row[0]][0])
+            yield self.__snapshot_from_particle_data_row(row)
 
     def event_granular_raw(self, i) -> list[list[tuple]]:
         for j in range(len(self.particle_dats[i])):
             row = self.particle_dats[i][j]
-            yield row[1], row[2], self.event_dat[row[0]][1], row[3], row[4], row[5], row[6], self.event_dat[row[0]][0]
+            yield self.__tuple_from_particle_data_row(row)
 
     def __loop_window(self, i):
         for row in self.particle_dats[i]:
-            if self.event_dat[row[0]] == 
-
-            if self.event_dat[r][0][7] == EntryType.WINDOW_CATCHUP.value and (
-                    self.event_dat.shape[0] == r + 1 or self.event_dat[r + 1][0][7] != EntryType.ROLLBACK.value
-            ): yield r
+            if self.__id_to_entry(self.event_dat[row[0]]) == EntryType.WINDOW_CATCHUP and (
+                self.__id_to_entry(self.event_dat[row[0] + 1]) == EntryType.WINDOW_SUCCESS or \
+                row[0] == len(self.event_dat) - 1
+            ): yield row
 
     def window_granular(self, i):
-        for r in self.__loop_window(i):
-            yield [Snapshot(particle[0], particle[1], particle[2], particle[3],
-                            particle[4], particle[5], particle[6], EntryType(particle[7]), particle[8])
-                   for particle in self.event_dat[r]]
+        for row in self.__loop_window(i):
+            yield self.__snapshot_from_particle_data_row(row)
 
     def window_granular_raw(self, i) -> list[list[tuple]]:
-        for r in self.__loop_window(i):
-            yield [(particle[0], particle[1], particle[2], particle[3],
-                            particle[4], particle[5], particle[6], particle[7], particle[8])
-                   for particle in self.event_dat[r]]
+        for row in self.__loop_window(i):
+            yield self.__tuple_from_particle_data_row(row)
 
 
 class Converter:
