@@ -63,13 +63,13 @@ class NumpyLogger(Logger):
         # Create outer folder if not there
         self.folder_name = self.FOLDER_NAME
         self.folder_path = os.path.join(log_root_folder_path, self.folder_name)
-        if self.folder_name not in os.listdir(log_root_folder_path):
+        if self.folder_name not in os.listdir(log_root_folder_path) and do_log:
             os.mkdir(self.folder_path)
 
         # Create subfolder if not there
         self.subfolder_name = "".join((c if c != ":" else "." for c in f"{custom_experiment_prefix}_{str(datetime.now()).replace(' ', '_')}"))
         self.subfolder_path = os.path.join(self.folder_path, self.subfolder_name)
-        if self.subfolder_name not in os.listdir(self.folder_path):
+        if self.subfolder_name not in os.listdir(self.folder_path) and do_log:
             os.mkdir(self.subfolder_path)
 
         # Store file handles for each particle's individual file as well as the global event file

@@ -105,7 +105,7 @@ class NumpyDataReader(DataReader):
             if filename.endswith("-events.npy"):
                 self.event_filepath = os.path.join(self.subfolder_path, filename)
             elif not filename.endswith("-config.txt"):
-                self.particle_filepaths[int(filename[-5])] = filename
+                self.particle_filepaths[int(filename[-5])] = os.path.join(self.subfolder_path, filename)
 
         assert self.event_filepath is not None
 
@@ -115,13 +115,15 @@ class NumpyDataReader(DataReader):
     @staticmethod
     def __id_to_entry(event_id: int) -> EntryType:
         """Given the event_id value from the raw numpy data, convert to the enum value"""
+        event_id = int(event_id)
+
         return {-3: EntryType.WINDOW_SUCCESS, -2: EntryType.ROLLBACK, -1: EntryType.WINDOW_CATCHUP}.get(event_id, EntryType.EVENT_ENTRY)
 
     def __tuple_from_particle_data_row(self, row) -> tuple:
         """Given a tuple of numpy data for a single entry of a particle snapshot, return a python tuple in the correct
         order for the snapshot datastructure"""
-        return row[1], row[2], self.event_dat[row[0]][1], row[3], row[4], row[5], row[6], \
-            self.event_dat[row[0]][0], self.__id_to_entry(self.event_dat[row[0]][0]).value, self.event_dat[row[0]][3], row[0]
+        return row[1], row[2], self.event_dat[int(row[0])][1], row[3], row[4], row[5], row[6], \
+            self.event_dat[int(row[0])][0], self.__id_to_entry(self.event_dat[int(row[0])][0]).value, self.event_dat[int(row[0])][3], row[0]
 
     def __snapshot_from_particle_data_row(self, row) -> Snapshot:
         """Given a tuple of numpy data for a single entry of a particle snapshot, return a snapshot of this data"""
@@ -162,9 +164,9 @@ class NumpyDataReader(DataReader):
 
     def __loop_window(self, i):
         for row in self.particle_dats[i]:
-            if self.__id_to_entry(self.event_dat[row[0]]) == EntryType.WINDOW_CATCHUP and (
-                self.__id_to_entry(self.event_dat[row[0] + 1]) == EntryType.WINDOW_SUCCESS or
-                row[0] == len(self.event_dat) - 1
+            if self.__id_to_entry(self.event_dat[int(row[0])][0]) == EntryType.WINDOW_CATCHUP and (
+                int(row[0]) == len(self.event_dat) - 1 or
+                self.__id_to_entry(self.event_dat[int(row[0] + 1)][0]) == EntryType.WINDOW_SUCCESS
             ): yield row
 
     def window_granular(self, i):
@@ -193,11 +195,11 @@ class Converter:
         # Find next available subfolder name and make it
         base_name = reader.get_subfolder_name() + name_suffix
         idx = 0
-        cur_name = base_name + str(idx)
+        cur_name = base_name + "-" + str(idx)
         while True:
             if cur_name in os.listdir(self.folder_path):
                 idx += 1
-                base_name + str(idx)
+                cur_name = base_name + "-" + str(idx)
             else: break
         self.subfolder_name = cur_name
         self.subfolder_path = os.path.join(self.folder_path, self.subfolder_name)
@@ -258,9 +260,9 @@ class TextConverter(Converter):
                 events = self.reader.event_granular_raw(p)
 
                 for idx, tup in enumerate(events):
-                    if self.show_percentages: print(f"---- {idx}")
+                    if self.show_percentages: pass#print(f"---- {idx}")
                     entry_type = tup[8]
-                    event_entry_idx = tup[10]
+                    event_entry_idx = int(tup[10])
 
                     if prev_vel is None or (not self.ignore_zero) or (prev_vel != tup[1]):
                         cached_str += f"w={f(tup[9])}  t={f(tup[2])}  ev={f(tup[7])}  " \
@@ -273,7 +275,8 @@ class TextConverter(Converter):
                         file.write(cached_str)
 
                     # Every particle is recorded at end of window. Use this to capture rollbacks and window ends
-                    elif event_entry == EntryType.WINDOW_CATCHUP.value:
+                    elif entry_type == EntryType.WINDOW_CATCHUP.value:
+
                         if self.reader.get_event_entry_at(event_entry_idx + 1).entry_type == EntryType.ROLLBACK:
                             if not self.ignore_rollbacks:
                                 cached_str += "ROLLBACK\n"
@@ -338,6 +341,8 @@ class MatplotlibConverter(Converter):
         plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-penaltyenergy.png"))
         plt.clf()
 
+        print([int(entry.t) for entry in self.reader.event_entries()])
+        #print([int(entry.total_energy) for entry in self.reader.event_entries()])
         plt.plot([entry.t for entry in self.reader.event_entries()],
                  [entry.total_energy for entry in self.reader.event_entries()])
         plt.xlabel("Time")
