@@ -10,7 +10,7 @@ from z_sims.core.util import get_next_time, get_next_index
 from z_logging.loggers import Logger
 
 
-class SPACM1DSim(Sim):
+class SPACM1DSim(Sim):  # TODO: Remove compute_energy flag, it's archaic
     def __init__(self, rollback_window_size: float, accel_gravity: float, timestep_gravity: float,
                  particle_positions: list[float], particle_velocities: list[float], wall_positions: list[float],
                  particle_masses: list[float], collision_stiffness: float, penalty_layer_thickness: float,
@@ -19,7 +19,7 @@ class SPACM1DSim(Sim):
         assert len(particle_positions) == len(particle_velocities)
 
         self.logger = logger
-        self.logger.record_config(locals())
+        self.logger.record_config(locals(), len(particle_positions))
 
         self.past_events: list[tuple[float, int, Event]] = []  # History for logging
 
@@ -45,15 +45,17 @@ class SPACM1DSim(Sim):
                                                           p) for p in wall_positions]
         self.collideables: list[Collidable] = self.walls + self.particles
 
-        self.do_compute_energy = compute_energy  # Should energy be tracked at each snapshot
         self.gravity_base = gravity_energy_base  # Vertical position of "ground" relative to which to compute gravitational energy
 
         self.sim_time = 0  # Tracks the time of the latest processed event
+
+        self.cur_window_idx = 0
 
     def run_sim(self):
         prev_t = None
         prev_t_store = None
         while True:
+            total_energy = 0
             while self.eventQ[0][0] <= self.end_of_window:
                 te, tidx, e = heapq.heappop(self.eventQ)  # time, event
                 #print(f"First: {e}")
@@ -76,6 +78,8 @@ class SPACM1DSim(Sim):
 
                     p.current_snapshots.append(Snapshot(x1, -1, t1, None, False, None, None, None, e.get_identifier()))  # Add new snapshot with placeholder v and has_velocity_changed
 
+                total_energy = 0
+                affected_particles = []  # For logging purposes records snapshots of particles
                 pop_snapshot_particle_idx = []  # idx of particles for which this event doesn't act, so we'll pop the snapshot to not bloat the log
                 for pi in range(len(self.particles)):
                     p = self.particles[pi]
@@ -92,21 +96,23 @@ class SPACM1DSim(Sim):
                         pc.v = v1
 
                         # Update energy
-                        if self.do_compute_energy:
-                            Eg = p.mass * abs(self.accel_gravity) * (pc.x - self.gravity_base)  # E_gravity = mgh
-                            Ek = 0.5 * p.mass * (v1_5 ** 2)  # E_kinetic = 1/2 mv^2
-                            Ep = 0
-                            for c in self.collideables:
-                                if c is not p:
-                                    for pen in c.active_penalties:
-                                        gap = pen.get_gap(p.get_latest_position())
-                                        if gap <= 0:
-                                            Ep += 0.5 * c.get_lth_stiffness(pen.layer) * (gap ** 2)
-                            Etotal = Eg + Ek + Ep
-                            pc.energy = Etotal
-                            pc.kinetic_energy = Ek
-                            pc.potential_energy = Eg
-                            pc.penalty_energy = Ep
+                        Eg = p.mass * abs(self.accel_gravity) * (pc.x - self.gravity_base)  # E_gravity = mgh
+                        Ek = 0.5 * p.mass * (v1_5 ** 2)  # E_kinetic = 1/2 mv^2
+                        Ep = 0
+                        for c in self.collideables:
+                            if c is not p:
+                                for pen in c.active_penalties:
+                                    gap = pen.get_gap(p.get_latest_position())
+                                    if gap <= 0:
+                                        Ep += 0.5 * c.get_lth_stiffness(pen.layer) * (gap ** 2)
+                        Etotal = Eg + Ek + Ep
+                        pc.energy = Etotal
+                        pc.kinetic_energy = Ek
+                        pc.potential_energy = Eg
+                        pc.penalty_energy = Ep
+
+                        affected_particles.append((pi, pc))
+
                     else:
                         pc.energy = p0.energy
                         pc.kinetic_energy = p0.kinetic_energy
@@ -114,14 +120,14 @@ class SPACM1DSim(Sim):
                         pc.penalty_energy = p0.penalty_energy
                         pc.v = p0.v
                         pop_snapshot_particle_idx.append(pi)
+                    total_energy += pc.energy
+
+                # Event-granular log: data on the event and data on particles affected by this event
+                self.logger.record_event(self.cur_window_idx, te, total_energy, e.get_identifier(), len(self.particles), affected_particles)
 
                 if len(pop_snapshot_particle_idx) == len(self.particles):  # If this event didn't affect anyone, clear those snapshots
                     for ii in pop_snapshot_particle_idx:
                         self.particles[ii].current_snapshots.pop(-1)
-
-                # Event-granular log: latest snapshot of all particles
-                else:
-                    self.logger.record_event([p.current_snapshots[-1] for p in self.particles])
 
                 heapq.heappush(self.eventQ, ((tidx + 1) * e.h, tidx + 1, e))  # Schedule next force event
 
@@ -139,7 +145,7 @@ class SPACM1DSim(Sim):
                                                         p0.kinetic_energy, p0.potential_energy, p0.penalty_energy, None))
 
             # window-granular log for particles
-            self.logger.record_window_snapshots([p.current_snapshots[-1] for p in self.particles])
+            self.logger.record_window_catchup(self.cur_window_idx, self.end_of_window, total_energy, [p.current_snapshots[-1] for p in self.particles])
 
             # Checks missed collisions
             next_penalty_candidates: list[Collidable] = []  # Objects whose next penalty layer needs activating
@@ -259,6 +265,9 @@ class SPACM1DSim(Sim):
                 self.end_of_window = self.start_of_window + self.R
                 self.eventQ_at_start = [(t, tidx, e) for t, tidx, e in self.eventQ]
                 prev_t_store = prev_t
+
+                self.cur_window_idx += 1
+                self.logger.record_window_success()
 
                 yield YieldType.TIME_WINDOW_FINISHED, self
 

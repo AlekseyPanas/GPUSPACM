@@ -289,60 +289,60 @@ class TextConverter(Converter):
 
 
 class MatplotlibConverter(Converter):
-    def number_of_suffixes(self) -> int: return 2
-
-    def parse_last_part(self, suffix: str) -> int: return int(suffix.split(".")[0])
-
     def convert(self):
-        subfolder_path = os.path.join(self.folder_path, f"{self.reader.get_subfolder_name()}-{self.output_number}")
-        os.mkdir(subfolder_path)
-
         for p in range(self.reader.get_num_particles()):
-            plt.plot([snaps[p].t for snaps in self.reader.window_granular()],
-                     [snaps[p].x for snaps in self.reader.window_granular()])
+            plt.plot([snap.t for snap in self.reader.window_granular(p)],
+                     [snap.x for snap in self.reader.window_granular(p)])
         plt.xlabel("Time")
         plt.ylabel("Particle Height")
-        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_subfolder_name()}-position-{self.output_number}.png"))
+        plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-position.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
-            plt.plot([snaps[p].t for snaps in self.reader.window_granular()],
-                     [snaps[p].v for snaps in self.reader.window_granular()])
+            plt.plot([snap.t for snap in self.reader.window_granular(p)],
+                     [snap.v for snap in self.reader.window_granular(p)])
         plt.xlabel("Time")
         plt.ylabel("Particle Velocity")
-        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_subfolder_name()}-velocity-{self.output_number}.png"))
+        plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-velocity.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
-            plt.plot([snaps[p].t for snaps in self.reader.window_granular()],
-                     [snaps[p].energy for snaps in self.reader.window_granular()])
+            plt.plot([snap.t for snap in self.reader.window_granular(p)],
+                     [snap.energy for snap in self.reader.window_granular(p)])
         plt.xlabel("Time")
         plt.ylabel("Particle Energy")
-        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_subfolder_name()}-energy-{self.output_number}.png"))
+        plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-energy.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
-            plt.plot([snaps[p].t for snaps in self.reader.window_granular()],
-                     [snaps[p].kinetic_energy for snaps in self.reader.window_granular()])
+            plt.plot([snap.t for snap in self.reader.window_granular(p)],
+                     [snap.kinetic_energy for snap in self.reader.window_granular(p)])
         plt.xlabel("Time")
         plt.ylabel("Particle Kinetic Energy")
-        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_subfolder_name()}-kineticenergy-{self.output_number}.png"))
+        plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-kineticenergy.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
-            plt.plot([snaps[p].t for snaps in self.reader.window_granular()],
-                     [snaps[p].potential_energy for snaps in self.reader.window_granular()])
+            plt.plot([snap.t for snap in self.reader.window_granular(p)],
+                     [snap.potential_energy for snap in self.reader.window_granular(p)])
         plt.xlabel("Time")
         plt.ylabel("Particle Potential Energy")
-        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_subfolder_name()}-potentialenergy-{self.output_number}.png"))
+        plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-potentialenergy.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
-            plt.plot([snaps[p].t for snaps in self.reader.window_granular()],
-                     [snaps[p].penalty_energy for snaps in self.reader.window_granular()])
+            plt.plot([snap.t for snap in self.reader.window_granular(p)],
+                     [snap.penalty_energy for snap in self.reader.window_granular(p)])
         plt.xlabel("Time")
         plt.ylabel("Particle Penalty Energy")
-        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_subfolder_name()}-penaltyenergy-{self.output_number}.png"))
+        plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-penaltyenergy.png"))
+        plt.clf()
+
+        plt.plot([entry.t for entry in self.reader.event_entries()],
+                 [entry.total_energy for entry in self.reader.event_entries()])
+        plt.xlabel("Time")
+        plt.ylabel("Total Energy")
+        plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-totalenergy.png"))
         plt.clf()
 
 
