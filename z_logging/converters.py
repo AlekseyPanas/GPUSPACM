@@ -45,7 +45,7 @@ class Snapshot:
 class DataReader:
     """Reads a log file of a specific type and parses it"""
     @abstractmethod
-    def get_file_name(self) -> str:
+    def get_subfolder_name(self) -> str:
         """Get the name of the file being parsed (not the whole path, just the file name)"""
 
     @abstractmethod
@@ -84,7 +84,7 @@ class NumpyDataReader(DataReader):
     def __init__(self, subfolder_path: str):
         self.subfolder_path = subfolder_path
 
-        self.num_particles: int = len(os.listdir(self.subfolder_path)) - 1
+        self.num_particles: int = len(os.listdir(self.subfolder_path)) - 2  # config and -events file excluded
 
         self.event_filepath = None
         self.particle_filepaths: list[str | None] = [None] * self.num_particles
@@ -92,7 +92,7 @@ class NumpyDataReader(DataReader):
         for filename in os.listdir(self.subfolder_path):
             if filename.endswith("-events.npy"):
                 self.event_filepath = os.path.join(self.subfolder_path, filename)
-            else:
+            elif not filename.endswith("-config.txt"):
                 self.particle_filepaths[int(filename[-5])] = filename
 
         assert self.event_filepath is not None
@@ -114,7 +114,7 @@ class NumpyDataReader(DataReader):
         """Given a tuple of numpy data for a single entry of a particle snapshot, return a snapshot of this data"""
         return Snapshot(*self.__tuple_from_particle_data_row(row))
 
-    def get_file_name(self):
+    def get_subfolder_name(self):
         return os.path.split(self.subfolder_path)[-1]
 
     def get_num_particles(self) -> int:
@@ -155,32 +155,31 @@ class NumpyDataReader(DataReader):
 
 
 class Converter:
-    def __init__(self, reader: DataReader, foldername: str, log_root_folder_path: str):
+    """
+    Convert raw data into a readable form using a reader.
+    @param name_suffix: optional additional ifo about the converter's config as part of the subfolder name
+    """
+    def __init__(self, reader: DataReader, foldername: str, log_root_folder_path: str, name_suffix=""):
         self.reader = reader
         self.folder_name = foldername
         self.folder_path = os.path.join(log_root_folder_path, foldername)
 
+        # Make folder name if not exists
         if foldername not in os.listdir(log_root_folder_path):
             os.mkdir(self.folder_path)
 
-        self.output_number = self.get_latest_output_number() + 1
-
-    def get_latest_output_number(self):
-        vals = [self.parse_last_part(f.split("-")[-1]) for f in os.listdir(self.folder_path) if
-                "-".join(f.split("-")[:-self.number_of_suffixes()]) == self.reader.get_file_name()]
-        return -1 if len(vals) == 0 else max(vals)
-
-    @abstractmethod
-    def number_of_suffixes(self) -> int:
-        """Filenames of converted files are saved as <name of npy file>-suffix1-suffix2-suffix3-...-suffixn.
-        Depending on the converter, there may be varying number of suffixes which affects how the
-        latest output number is computed. This should return the number of suffixes in the filenames of the
-        inheriting converter"""
-
-    @abstractmethod
-    def parse_last_part(self, suffix: str) -> int:
-        """Parses the final suffix which contains the output number. Some files may have extensions which need removal
-        in which case this method needs to implement the parsing logic. e.g 0.png -> 0"""
+        # Find next available subfolder name and make it
+        base_name = reader.get_subfolder_name() + name_suffix
+        idx = 0
+        cur_name = base_name + str(idx)
+        while True:
+            if cur_name in os.listdir(self.folder_path):
+                idx += 1
+                base_name + str(idx)
+            else: break
+        self.subfolder_name = cur_name
+        self.subfolder_path = os.path.join(self.folder_path, self.subfolder_name)
+        os.mkdir(self.subfolder_path)
 
     @abstractmethod
     def convert(self):
@@ -191,15 +190,11 @@ class TextConverter(Converter):
     def __init__(self, reader: DataReader, foldername: str, log_root_folder_path: str,
                  ignore_zero_force_events=False, ignore_rollbacks=False,
                  is_binary=False, show_percentages=False):
-        super().__init__(reader, foldername, log_root_folder_path)
+        super().__init__(reader, foldername, log_root_folder_path, ("" if ignore_zero_force_events else "z") + ("" if ignore_rollbacks else "r") + ("b" if is_binary else ""))
         self.ignore_zero = ignore_zero_force_events
         self.ignore_rollbacks = ignore_rollbacks
         self.is_binary = is_binary
         self.show_percentages = show_percentages
-
-    def number_of_suffixes(self) -> int: return 2
-
-    def parse_last_part(self, suffix: str) -> int: return int(suffix)
 
     def convert(self):
         def convert_binary(x):
@@ -210,7 +205,7 @@ class TextConverter(Converter):
 
         for p in range(self.reader.get_num_particles()):
             with open(os.path.join(self.folder_path,
-                                   self.reader.get_file_name() + f"-P{p}-{self.output_number}"), "w") as file:
+                                   self.reader.get_subfolder_name() + f"-P{p}-{self.output_number}"), "w") as file:
                 f = convert_binary if self.is_binary else convert_identity
                 cached_str = ""
                 just_saw_end_of_window = False
@@ -253,7 +248,7 @@ class MatplotlibConverter(Converter):
     def parse_last_part(self, suffix: str) -> int: return int(suffix.split(".")[0])
 
     def convert(self):
-        subfolder_path = os.path.join(self.folder_path, f"{self.reader.get_file_name()}-{self.output_number}")
+        subfolder_path = os.path.join(self.folder_path, f"{self.reader.get_subfolder_name()}-{self.output_number}")
         os.mkdir(subfolder_path)
 
         for p in range(self.reader.get_num_particles()):
@@ -261,7 +256,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].x for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Height")
-        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_file_name()}-position-{self.output_number}.png"))
+        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_subfolder_name()}-position-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -269,7 +264,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].v for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Velocity")
-        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_file_name()}-velocity-{self.output_number}.png"))
+        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_subfolder_name()}-velocity-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -277,7 +272,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].energy for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Energy")
-        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_file_name()}-energy-{self.output_number}.png"))
+        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_subfolder_name()}-energy-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -285,7 +280,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].kinetic_energy for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Kinetic Energy")
-        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_file_name()}-kineticenergy-{self.output_number}.png"))
+        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_subfolder_name()}-kineticenergy-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -293,7 +288,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].potential_energy for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Potential Energy")
-        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_file_name()}-potentialenergy-{self.output_number}.png"))
+        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_subfolder_name()}-potentialenergy-{self.output_number}.png"))
         plt.clf()
 
         for p in range(self.reader.get_num_particles()):
@@ -301,7 +296,7 @@ class MatplotlibConverter(Converter):
                      [snaps[p].penalty_energy for snaps in self.reader.window_granular()])
         plt.xlabel("Time")
         plt.ylabel("Particle Penalty Energy")
-        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_file_name()}-penaltyenergy-{self.output_number}.png"))
+        plt.savefig(os.path.join(subfolder_path, f"{self.reader.get_subfolder_name()}-penaltyenergy-{self.output_number}.png"))
         plt.clf()
 
 
@@ -315,7 +310,7 @@ class TensorboardConverter(Converter):
     def parse_last_part(self, suffix: str) -> int: return int(suffix)
 
     def convert(self):
-        writer = SummaryWriter(os.path.join(self.folder_path, self.reader.get_file_name() + f"-{self.output_number}"))
+        writer = SummaryWriter(os.path.join(self.folder_path, self.reader.get_subfolder_name() + f"-{self.output_number}"))
 
         if self.only_window:
             self.positions = [[snap.x for snap in snaps] for snaps in self.reader.window_granular()]
