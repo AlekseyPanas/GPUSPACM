@@ -10,11 +10,11 @@ from z_sims.core.util import get_next_time, get_next_index
 from z_logging.loggers import Logger
 
 
-class SPACM1DSim(Sim):  # TODO: Remove compute_energy flag, it's archaic
+class SPACM1DSim(Sim):
     def __init__(self, rollback_window_size: float, accel_gravity: float, timestep_gravity: float,
                  particle_positions: list[float], particle_velocities: list[float], wall_positions: list[float],
                  particle_masses: list[float], collision_stiffness: float, penalty_layer_thickness: float,
-                 penalty_timestep: float, logger: Logger, compute_energy: bool = True,
+                 penalty_timestep: float, logger: Logger,
                  gravity_energy_base: float = -10):
         assert len(particle_positions) == len(particle_velocities)
 
@@ -51,7 +51,28 @@ class SPACM1DSim(Sim):  # TODO: Remove compute_energy flag, it's archaic
 
         self.cur_window_idx = 0
 
+    def __compute_particle_energy(self, p: Particle, vel: float, pos: float) -> tuple[float, float, float, float]:
+        """Given a particle and a choice of velocity, compute the particle's
+        [gravity potential, kinetic, penalty, total] energies. The reason for providing a custom velocity
+        is to have the choice to measure at different intermediate steps (e.g v1.5)"""
+        Eg: float = p.mass * abs(self.accel_gravity) * (pos - self.gravity_base)  # E_gravity = mgh
+        Ek: float = 0.5 * p.mass * (vel ** 2)  # E_kinetic = 1/2 mv^2
+        Ep: float = 0
+        for c in self.collideables:
+            if c is not p:
+                for pen in c.active_penalties:
+                    gap = pen.get_gap(pos)
+                    if gap <= 0:
+                        Ep += 0.5 * c.get_lth_stiffness(pen.layer) * (gap ** 2)
+        return Eg, Ek, Ep, Eg + Ek + Ep
+
     def run_sim(self):
+        # Compute initial energy for all particles
+        for particle in self.particles:
+            pc = particle.current_snapshots[-1]
+            pc.potential_energy, pc.kinetic_energy, pc.penalty_energy, pc.energy = \
+                self.__compute_particle_energy(particle, pc.v, pc.x)
+
         prev_t = None
         prev_t_store = None
         while True:
@@ -96,20 +117,8 @@ class SPACM1DSim(Sim):  # TODO: Remove compute_energy flag, it's archaic
                         pc.v = v1
 
                         # Update energy
-                        Eg = p.mass * abs(self.accel_gravity) * (pc.x - self.gravity_base)  # E_gravity = mgh
-                        Ek = 0.5 * p.mass * (v1_5 ** 2)  # E_kinetic = 1/2 mv^2
-                        Ep = 0
-                        for c in self.collideables:
-                            if c is not p:
-                                for pen in c.active_penalties:
-                                    gap = pen.get_gap(p.get_latest_position())
-                                    if gap <= 0:
-                                        Ep += 0.5 * c.get_lth_stiffness(pen.layer) * (gap ** 2)
-                        Etotal = Eg + Ek + Ep
-                        pc.energy = Etotal
-                        pc.kinetic_energy = Ek
-                        pc.potential_energy = Eg
-                        pc.penalty_energy = Ep
+                        pc.potential_energy, pc.kinetic_energy, pc.penalty_energy, pc.energy = \
+                            self.__compute_particle_energy(p, v1_5, p.get_latest_position())
 
                         affected_particles.append((pi, pc))
 
@@ -153,6 +162,18 @@ class SPACM1DSim(Sim):  # TODO: Remove compute_energy flag, it's archaic
                 move_on = False  # Used as a "break" flag to exit loops once c has been added to the list
                 for p in self.particles:  # Moving particles which may have entered a new penalty layer for c
                     if p is not c:  # Don't detect against self, duh
+                        """
+                        Intuition: Would like to detect if moving particle entered a penalty region of another
+                        potentially moving object within some time range [t0,t1]. The cases are as follows
+                        
+                        A: The particle is already within the region at the start of the interval
+                        B: The particle was exactly on the boundary of the penalty region at some point within [t0,t1]
+                             (because to enter the region, it must have been on the boundary)
+                             
+                        For 1D, we have the upper and lower boundary. We solve a linear eq to find if there is a time t
+                        when the particle is on the boundary. Beforehand, we check if the particle is inside the region
+                        to begin with
+                        """
 
                         # All snapshots where p or c had a velocity change (guaranteed to also include the first and snapshot
                         # of this rollback window)
@@ -176,6 +197,7 @@ class SPACM1DSim(Sim):  # TODO: Remove compute_energy flag, it's archaic
                             # Check if particle is already within the penalty layer at start of this interval
                             if c_positions[0] - c_next_thickness <= p_positions[0] <= c_positions[0] + c_next_thickness:
                                 next_penalty_candidates.append(c)
+                                move_on = True
 
                             # Check if there's a t0 <= t <= t1 for which the particle enters the penalty layer
                             else:
@@ -205,10 +227,11 @@ class SPACM1DSim(Sim):  # TODO: Remove compute_energy flag, it's archaic
                     heapq.heappush(self.eventQ, (next_idx * penalty.h, next_idx, penalty))
                     c.active_penalties.append(penalty)
 
-                    # Assert that these new layers exert 0 force on all particles
-                    for p in self.particles:
-                        if p is not c:
-                            assert penalty.get_force(p) == 0
+                    # Assert that these new layers exert 0 force on all particles (except for first window in which particles may start out within a layera)
+                    if self.cur_window_idx != 0:
+                        for p in self.particles:
+                            if p is not c:
+                                assert penalty.get_force(p) == 0
                 #heapq.heapify(self.eventQ)
 
                 # Update saved starting event queue
