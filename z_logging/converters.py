@@ -292,54 +292,59 @@ class TextConverter(Converter):
 
 
 class MatplotlibConverter(Converter):
+    def __init__(self, reader: DataReader, foldername: str, log_root_folder_path: str, only_total_energy=False):
+        super().__init__(reader, foldername, log_root_folder_path, "-e" if only_total_energy else "")
+        self.only_total_energy = only_total_energy
+
     def convert(self):
-        for p in range(self.reader.get_num_particles()):
-            plt.plot([snap.t for snap in self.reader.window_granular(p)],
-                     [snap.x for snap in self.reader.window_granular(p)])
-        plt.xlabel("Time")
-        plt.ylabel("Particle Height")
-        plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-position.png"))
-        plt.clf()
+        if not self.only_total_energy:
+            for p in range(self.reader.get_num_particles()):
+                plt.plot([snap.t for snap in self.reader.window_granular(p)],
+                         [snap.x for snap in self.reader.window_granular(p)])
+            plt.xlabel("Time")
+            plt.ylabel("Particle Height")
+            plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-position.png"))
+            plt.clf()
 
-        for p in range(self.reader.get_num_particles()):
-            plt.plot([snap.t for snap in self.reader.window_granular(p)],
-                     [snap.v for snap in self.reader.window_granular(p)])
-        plt.xlabel("Time")
-        plt.ylabel("Particle Velocity")
-        plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-velocity.png"))
-        plt.clf()
+            for p in range(self.reader.get_num_particles()):
+                plt.plot([snap.t for snap in self.reader.window_granular(p)],
+                         [snap.v for snap in self.reader.window_granular(p)])
+            plt.xlabel("Time")
+            plt.ylabel("Particle Velocity")
+            plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-velocity.png"))
+            plt.clf()
 
-        for p in range(self.reader.get_num_particles()):
-            plt.plot([snap.t for snap in self.reader.window_granular(p)],
-                     [snap.energy for snap in self.reader.window_granular(p)])
-        plt.xlabel("Time")
-        plt.ylabel("Particle Energy")
-        plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-energy.png"))
-        plt.clf()
+            for p in range(self.reader.get_num_particles()):
+                plt.plot([snap.t for snap in self.reader.window_granular(p)],
+                         [snap.energy for snap in self.reader.window_granular(p)])
+            plt.xlabel("Time")
+            plt.ylabel("Particle Energy")
+            plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-energy.png"))
+            plt.clf()
 
-        for p in range(self.reader.get_num_particles()):
-            plt.plot([snap.t for snap in self.reader.window_granular(p)],
-                     [snap.kinetic_energy for snap in self.reader.window_granular(p)])
-        plt.xlabel("Time")
-        plt.ylabel("Particle Kinetic Energy")
-        plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-kineticenergy.png"))
-        plt.clf()
+            for p in range(self.reader.get_num_particles()):
+                plt.plot([snap.t for snap in self.reader.window_granular(p)],
+                         [snap.kinetic_energy for snap in self.reader.window_granular(p)])
+            plt.xlabel("Time")
+            plt.ylabel("Particle Kinetic Energy")
+            plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-kineticenergy.png"))
+            plt.clf()
 
-        for p in range(self.reader.get_num_particles()):
-            plt.plot([snap.t for snap in self.reader.window_granular(p)],
-                     [snap.potential_energy for snap in self.reader.window_granular(p)])
-        plt.xlabel("Time")
-        plt.ylabel("Particle Potential Energy")
-        plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-potentialenergy.png"))
-        plt.clf()
+            for p in range(self.reader.get_num_particles()):
+                plt.plot([snap.t for snap in self.reader.window_granular(p)],
+                         [snap.potential_energy for snap in self.reader.window_granular(p)])
+            plt.xlabel("Time")
+            plt.ylabel("Particle Potential Energy")
+            plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-potentialenergy.png"))
+            plt.clf()
 
-        for p in range(self.reader.get_num_particles()):
-            plt.plot([snap.t for snap in self.reader.window_granular(p)],
-                     [snap.penalty_energy for snap in self.reader.window_granular(p)])
-        plt.xlabel("Time")
-        plt.ylabel("Particle Penalty Energy")
-        plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-penaltyenergy.png"))
-        plt.clf()
+            for p in range(self.reader.get_num_particles()):
+                plt.plot([snap.t for snap in self.reader.window_granular(p)],
+                         [snap.penalty_energy for snap in self.reader.window_granular(p)])
+            plt.xlabel("Time")
+            plt.ylabel("Particle Penalty Energy")
+            plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-penaltyenergy.png"))
+            plt.clf()
 
         plt.plot([entry.t for entry in self.reader.event_entries() if entry.entry_type.value < 2],
                  [entry.total_energy for entry in self.reader.event_entries() if entry.entry_type.value < 2])
@@ -350,75 +355,28 @@ class MatplotlibConverter(Converter):
 
 
 class TensorboardConverter(Converter):
-    def __init__(self, reader: DataReader, foldername: str, log_root_folder_path: str, only_window: bool):
+    """
+    To install tensorboard, simple run `pip install tensorboard`
+    Then run tensorboard command in terminal with `--logdir <folder path>`
+    Add `--samples_per_plugin scalars=999999999` to ensure datapoints aren't skipped
+    """
+    def __init__(self, reader: DataReader, foldername: str, log_root_folder_path: str):
         super().__init__(reader, foldername, log_root_folder_path)
-        self.only_window = only_window  # When true only records snapshots at the end of each window, ignores rollback
-
-    def number_of_suffixes(self) -> int: return 1
-
-    def parse_last_part(self, suffix: str) -> int: return int(suffix)
 
     def convert(self):
-        writer = SummaryWriter(os.path.join(self.folder_path, self.reader.get_subfolder_name() + f"-{self.output_number}"))
+        writer = SummaryWriter(os.path.join(self.subfolder_path, self.reader.get_subfolder_name()))
 
-        if self.only_window:
-            self.positions = [[snap.x for snap in snaps] for snaps in self.reader.window_granular()]
-            self.velocities = [[snap.v for snap in snaps] for snaps in self.reader.window_granular()]
-            self.energies = [[snap.energy for snap in snaps] for snaps in self.reader.window_granular()]
-            self.kinetic_energies = [[snap.kinetic_energy for snap in snaps] for snaps in self.reader.window_granular()]
-            self.potential_energies = [[snap.potential_energy for snap in snaps] for snaps in self.reader.window_granular()]
-            self.penalty_energies = [[snap.penalty_energy for snap in snaps] for snaps in self.reader.window_granular()]
-            self.times = [snaps[0].t for snaps in self.reader.window_granular()]
+        for p in range(self.reader.get_num_particles()):
+            for snap in self.reader.window_granular(p):
+                writer.add_scalar(f"PosP{p}", snap.x, int(snap.t * 100000))
+                writer.add_scalar(f"VelP{p}", snap.v, int(snap.t * 100000))
+                writer.add_scalar(f"EnergyP{p}", snap.energy, int(snap.t * 100000))
+                writer.add_scalar(f"KineticEnergyP{p}", snap.kinetic_energy, int(snap.t * 100000))
+                writer.add_scalar(f"PotentialEnergyP{p}", snap.potential_energy, int(snap.t * 100000))
+                writer.add_scalar(f"PenaltyEnergyP{p}", snap.penalty_energy, int(snap.t * 100000))
 
-            # All the lists should be the same length so choosing self.positions is arbitrary
-            for i in range(len(self.positions)):
-                for p in range(len(self.positions[i])):
-                    writer.add_scalar(f"PosP{p}", self.positions[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"VelP{p}", self.velocities[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"EnergyP{p}", self.energies[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"KineticEnergyP{p}", self.kinetic_energies[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"PotentialEnergyP{p}", self.potential_energies[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"PenaltyEnergyP{p}", self.penalty_energies[i][p], int(self.times[i] * 100000))
+        for entry in self.reader.event_entries():
+            if entry.entry_type.value < 2:
+                writer.add_scalar("TotalEnergy", entry.total_energy, int(entry.t * 100000))
 
-        else:
-            self.positions = [[snap.x for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
-            self.velocities = [[snap.v for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
-            self.energies = [[snap.energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
-            self.kinetic_energies = [[snap.kinetic_energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
-            self.potential_energies = [[snap.potential_energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
-            self.penalty_energies = [[snap.penalty_energy for snap in snaps] for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
-            self.times = [snaps[0].t for snaps in self.reader.event_granular() if snaps[0].snap_type != EntryType.ROLLBACK]
-            self.rollback_numbers = []
-            self.cur_rollback = 0
-            for snaps in self.reader.event_granular():
-                if snaps[0].snap_type == EntryType.ROLLBACK:
-                    self.cur_rollback += 1
-                else:
-                    self.rollback_numbers.append(self.cur_rollback)
-            assert len(self.rollback_numbers) == len(self.times)
-
-            # All the lists should be the same length so choosing self.positions is arbitrary
-            for i in range(len(self.positions)):
-                for p in range(len(self.positions[i])):
-                    writer.add_scalar(f"PosP{p}/{self.rollback_numbers[i]}", self.positions[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"VelP{p}/{self.rollback_numbers[i]}", self.velocities[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"EnergyP{p}/{self.rollback_numbers[i]}", self.energies[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"KineticEnergyP{p}/{self.rollback_numbers[i]}", self.kinetic_energies[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"PotentialEnergyP{p}/{self.rollback_numbers[i]}", self.potential_energies[i][p], int(self.times[i] * 100000))
-                    writer.add_scalar(f"PenaltyEnergyP{p}/{self.rollback_numbers[i]}", self.penalty_energies[i][p], int(self.times[i] * 100000))
-
-            layout = {
-                f"SimulationP{p}": {
-                    f"PosP{p}": ["Multiline", [f"PosP{p}/{i}" for i in range(self.cur_rollback + 1)]],
-                    f"VelP{p}": ["Multiline", [f"VelP{p}/{i}" for i in range(self.cur_rollback + 1)]],
-                    f"EnergyP{p}": ["Multiline", [f"EnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]],
-                    f"KineticEnergyP{p}": ["Multiline", [f"KineticEnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]],
-                    f"PotentialEnergyP{p}": ["Multiline", [f"PotentialEnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]],
-                    f"PenaltyEnergyP{p}": ["Multiline", [f"PenaltyEnergyP{p}/{i}" for i in range(self.cur_rollback + 1)]]
-                } for p in range(self.reader.get_num_particles())
-            }
-
-            writer.add_custom_scalars(layout)
         writer.close()
-
-        self.output_number += 1

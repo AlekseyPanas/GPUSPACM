@@ -31,7 +31,7 @@ if __name__ == "__main__":
     subfolder_path = os.path.join(NPY_LOG_PATH, os.listdir(NPY_LOG_PATH)[subfolder_idx])
     reader = NumpyDataReader(subfolder_path)
 
-    options = ["Text", "Matplotlib", "Tensorboard (w/ rollback)", "Tensorboard (w/o rollback)"]
+    options = ["Text", "Matplotlib", "Tensorboard"]
     opt_idx = choose_option_from_list(options)
 
     if opt_idx == 0:
@@ -42,10 +42,9 @@ if __name__ == "__main__":
                       (lambda: (print("Print progress?"), choose_option_from_list(["y", "n"]))[1])() == 0
                       ).convert()
     elif opt_idx == 1:
-        MatplotlibConverter(reader, "matplotlibplots", LOG_ROOT_PATH).convert()
+        MatplotlibConverter(reader, "matplotlibplots", LOG_ROOT_PATH,
+                            (lambda: (print("Only Energy?"), choose_option_from_list(["y", "n"]))[1])() == 0).convert()
     elif opt_idx == 2:
-        TensorboardConverter(reader, "runs", LOG_ROOT_PATH, False).convert()
-    elif opt_idx == 3:
-        TensorboardConverter(reader, "runs", LOG_ROOT_PATH, True).convert()
+        TensorboardConverter(reader, "runs", LOG_ROOT_PATH).convert()
     else:
         print("Sus.... this codepath should be impossible")

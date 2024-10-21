@@ -1,5 +1,6 @@
 npdat/
 textlogs/
+runs/
 matplotlibplots/
 __pycache__/
 .idea/
