@@ -90,11 +90,15 @@ class NumpyLogger(Logger):
 
     def __reset_cache(self):
         """Clear all caches"""
+        if not self.do_log: return
+
         self.particle_caches = [np.ndarray([0, 7]) for _ in range(self.num_particles)]
         self.event_cache = np.ndarray([0, 4])
 
     def __flush(self):
         """Flush all caches to file and clear the caches"""
+        if not self.do_log: return
+
         for i in range(self.num_particles):
             self.particle_handles[i].append(self.particle_caches[i])
         self.event_handle.append(self.event_cache)
@@ -102,6 +106,8 @@ class NumpyLogger(Logger):
 
     def __increment_and_flush_cache(self):
         """Increment the cache counter and flush if cache size is maxed out"""
+        if not self.do_log: return
+
         self.cache_counter += 1
         if self.cache_counter >= self.cache_size:
             self.cache_counter = 0
@@ -164,9 +170,13 @@ class NumpyLogger(Logger):
         self.__increment_and_flush_cache()
 
     def output_data(self):
+        if not self.do_log: return
+
         self.__flush()
 
     def quit(self):
+        if not self.do_log: return
+
         self.__flush()
         self.event_handle.close()
         for h in self.particle_handles:
