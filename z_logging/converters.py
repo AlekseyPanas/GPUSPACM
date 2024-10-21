@@ -260,7 +260,7 @@ class TextConverter(Converter):
                 events = self.reader.event_granular_raw(p)
 
                 for idx, tup in enumerate(events):
-                    if self.show_percentages: pass#print(f"---- {idx}")
+                    if self.show_percentages: print(f"---- {idx}")
                     entry_type = tup[8]
                     event_entry_idx = int(tup[10])
 
@@ -341,10 +341,8 @@ class MatplotlibConverter(Converter):
         plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-penaltyenergy.png"))
         plt.clf()
 
-        print([int(entry.t) for entry in self.reader.event_entries()])
-        #print([int(entry.total_energy) for entry in self.reader.event_entries()])
-        plt.plot([entry.t for entry in self.reader.event_entries()],
-                 [entry.total_energy for entry in self.reader.event_entries()])
+        plt.plot([entry.t for entry in self.reader.event_entries() if entry.entry_type.value < 2],
+                 [entry.total_energy for entry in self.reader.event_entries() if entry.entry_type.value < 2])
         plt.xlabel("Time")
         plt.ylabel("Total Energy")
         plt.savefig(os.path.join(self.subfolder_path, f"{self.reader.get_subfolder_name()}-totalenergy.png"))
